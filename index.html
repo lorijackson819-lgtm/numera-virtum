@@ -1,0 +1,1690 @@
+<!DOCTYPE html>
+<!--
+╔══════════════════════════════════════════════════════════╗
+║  NUMERA VIRTUM — v4 (architecture sécurisée)             ║
+║  ✅ Auth réelle : Firebase Authentication (Google + email)║
+║  ✅ Clé SMSPVA et clé secrète FedaPay : côté serveur      ║
+║     uniquement (netlify/functions), jamais dans ce fichier║
+║  ✅ Paiement vérifié par webhook serveur, pas par le front║
+║  ✅ Données (comptes, numéros) stockées dans Firestore,   ║
+║     pas dans le localStorage du navigateur                ║
+║  Voir README.md à la racine du projet pour la config.     ║
+╚══════════════════════════════════════════════════════════╝
+-->
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- ╔══════════════════════════════════════════╗
+     ║  SECURITY HEADERS — NE PAS SUPPRIMER    ║
+     ╚══════════════════════════════════════════╝ -->
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'self';
+  script-src 'self' 'unsafe-inline' https://cdn.fedapay.com https://app.fedapay.com https://www.gstatic.com https://apis.google.com;
+  style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+  font-src https://fonts.gstatic.com;
+  img-src 'self' data: https:;
+  connect-src 'self' https://api.fedapay.com https://app.fedapay.com https://*.googleapis.com https://*.firebaseio.com https://identitytoolkit.googleapis.com;
+  frame-src https://app.fedapay.com https://*.firebaseapp.com;
+  object-src 'none';
+  base-uri 'self';
+">
+<meta http-equiv="X-Content-Type-Options" content="nosniff">
+<meta http-equiv="X-Frame-Options" content="DENY">
+<meta http-equiv="Referrer-Policy" content="strict-origin-when-cross-origin">
+<meta http-equiv="Permissions-Policy" content="geolocation=(), microphone=(), camera=()">
+<title>Numera Virtum — Numéros Virtuels</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.fedapay.com/checkout.js?v=1.1.7"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="firebase-config.js"></script>
+<style>
+  :root {
+    --bg: #08090d;
+    --surface: #0f1118;
+    --surface2: #161924;
+    --border: #1e2130;
+    --accent: #6c63ff;
+    --accent2: #a78bfa;
+    --green: #22d3a0;
+    --red: #ff4d6d;
+    --text: #f0f0f5;
+    --muted: #6b7280;
+    --card: #12141f;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  h1, h2, h3, h4 { font-family: 'Space Grotesk', sans-serif; }
+
+  /* ─── NAVBAR ─── */
+  nav {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 24px;
+    background: rgba(8,9,13,0.85);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+  }
+  .logo { font-family: 'Space Grotesk', sans-serif; font-size: 1.2rem; font-weight: 700; color: var(--text); }
+  .logo span { color: var(--accent); }
+  .nav-actions { display: flex; gap: 10px; }
+  .btn { padding: 9px 18px; border-radius: 8px; font-size: 0.85rem; font-weight: 500; cursor: pointer; border: none; transition: all 0.2s; font-family: 'Inter', sans-serif; }
+  .btn-ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: #5a52e0; transform: translateY(-1px); }
+  .btn-green { background: var(--green); color: #08090d; font-weight: 600; }
+  .btn-green:hover { background: #1ab88a; }
+  .btn-red { background: var(--red); color: #fff; }
+  .btn-red:hover { background: #e03050; }
+
+  /* ─── PAGES ─── */
+  .page { display: none; padding-top: 70px; min-height: 100vh; }
+  .page.active { display: block; }
+
+  /* ─── HERO ─── */
+  #page-home {
+    display: none;
+    background: radial-gradient(ellipse at 60% 0%, rgba(108,99,255,0.12) 0%, transparent 60%),
+                radial-gradient(ellipse at 10% 80%, rgba(34,211,160,0.07) 0%, transparent 50%),
+                var(--bg);
+  }
+  #page-home.active { display: block; }
+
+  .hero {
+    text-align: center;
+    padding: 80px 24px 60px;
+    max-width: 700px;
+    margin: 0 auto;
+  }
+  .hero-badge {
+    display: inline-block;
+    background: rgba(108,99,255,0.12);
+    border: 1px solid rgba(108,99,255,0.3);
+    color: var(--accent2);
+    padding: 5px 14px;
+    border-radius: 20px;
+    font-size: 0.78rem;
+    font-weight: 500;
+    margin-bottom: 24px;
+    letter-spacing: 0.5px;
+  }
+  .hero h1 {
+    font-size: clamp(2rem, 6vw, 3.2rem);
+    font-weight: 700;
+    line-height: 1.15;
+    margin-bottom: 18px;
+    background: linear-gradient(135deg, #f0f0f5 30%, var(--accent2));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .hero p {
+    color: var(--muted);
+    font-size: 1.05rem;
+    line-height: 1.7;
+    margin-bottom: 36px;
+  }
+  .hero-cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+
+  /* ─── STATS ─── */
+  .stats {
+    display: flex; justify-content: center; gap: 0;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin: 0 24px 60px;
+    max-width: 600px;
+    margin-left: auto; margin-right: auto;
+    overflow: hidden;
+    background: var(--surface);
+  }
+  .stat { flex: 1; padding: 20px; text-align: center; border-right: 1px solid var(--border); }
+  .stat:last-child { border-right: none; }
+  .stat-num { font-family: 'Space Grotesk', sans-serif; font-size: 1.6rem; font-weight: 700; color: var(--accent); }
+  .stat-label { font-size: 0.75rem; color: var(--muted); margin-top: 4px; }
+
+  /* ─── SECTION TITRES ─── */
+  .section { padding: 60px 24px; max-width: 900px; margin: 0 auto; }
+  .section-title { font-size: 1.5rem; font-weight: 700; margin-bottom: 8px; }
+  .section-sub { color: var(--muted); font-size: 0.9rem; margin-bottom: 32px; }
+
+  /* ─── CARDS NUMÉROS ─── */
+  .plans-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media(max-width: 500px) { .plans-grid { grid-template-columns: 1fr; } }
+
+  .plan-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 24px;
+    cursor: pointer;
+    transition: all 0.25s;
+    position: relative;
+    overflow: hidden;
+  }
+  .plan-card::before {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0; height: 2px;
+    background: linear-gradient(90deg, var(--accent), var(--green));
+    opacity: 0;
+    transition: opacity 0.25s;
+  }
+  .plan-card:hover { border-color: var(--accent); transform: translateY(-3px); box-shadow: 0 8px 30px rgba(108,99,255,0.15); }
+  .plan-card:hover::before { opacity: 1; }
+  .plan-type { font-size: 0.72rem; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+  .plan-name { font-family: 'Space Grotesk', sans-serif; font-size: 1.1rem; font-weight: 600; margin-bottom: 12px; }
+  .plan-desc { font-size: 0.82rem; color: var(--muted); line-height: 1.6; margin-bottom: 16px; }
+  .plan-badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 0.72rem; font-weight: 600; }
+  .badge-temp { background: rgba(255,77,109,0.15); color: var(--red); }
+  .badge-monthly { background: rgba(34,211,160,0.12); color: var(--green); }
+
+  /* ─── COUNTRIES ─── */
+  .countries-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+  .country-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .country-card:hover { border-color: var(--accent); background: rgba(108,99,255,0.06); }
+  .country-flag { font-size: 1.6rem; }
+  .country-info { flex: 1; }
+  .country-name { font-weight: 500; font-size: 0.9rem; }
+  .country-price { font-size: 0.78rem; color: var(--muted); margin-top: 2px; }
+  .country-card.selected { border-color: var(--accent); background: rgba(108,99,255,0.1); }
+
+  /* ─── MODAL ─── */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0; z-index: 200;
+    background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
+    align-items: center; justify-content: center; padding: 20px;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 32px;
+    width: 100%; max-width: 420px;
+    position: relative;
+  }
+  .modal-close { position: absolute; top: 16px; right: 16px; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 1.2rem; }
+  .modal h3 { font-size: 1.2rem; margin-bottom: 6px; }
+  .modal-sub { color: var(--muted); font-size: 0.85rem; margin-bottom: 24px; }
+
+  /* ─── FORMS ─── */
+  .form-group { margin-bottom: 16px; }
+  .form-label { display: block; font-size: 0.82rem; color: var(--muted); margin-bottom: 6px; font-weight: 500; }
+  .form-input {
+    width: 100%; padding: 11px 14px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; color: var(--text); font-size: 0.9rem;
+    font-family: 'Inter', sans-serif;
+    transition: border-color 0.2s; outline: none;
+  }
+  .form-input:focus { border-color: var(--accent); }
+  .form-divider { display: flex; align-items: center; gap: 12px; margin: 20px 0; color: var(--muted); font-size: 0.8rem; }
+  .form-divider::before, .form-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+  .btn-google {
+    width: 100%; padding: 11px; border-radius: 8px;
+    background: var(--surface); border: 1px solid var(--border);
+    color: var(--text); font-size: 0.88rem; font-weight: 500;
+    cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px;
+    transition: all 0.2s; font-family: 'Inter', sans-serif;
+  }
+  .btn-google:hover { border-color: #4285F4; background: rgba(66,133,244,0.08); }
+  .btn-google svg { width: 18px; height: 18px; }
+  .btn-full { width: 100%; padding: 12px; font-size: 0.9rem; }
+  .link-btn { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 0.85rem; font-family: 'Inter', sans-serif; }
+  .link-btn:hover { text-decoration: underline; }
+  .form-switch { text-align: center; color: var(--muted); font-size: 0.83rem; margin-top: 16px; }
+
+  /* ─── DASHBOARD ─── */
+  #page-dashboard { display: none; }
+  #page-dashboard.active { display: block; }
+  .dash-header {
+    padding: 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 12px;
+  }
+  .dash-welcome { font-size: 0.9rem; color: var(--muted); }
+  .dash-welcome span { color: var(--text); font-weight: 600; }
+  .dash-tabs {
+    display: flex; gap: 0;
+    border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+    margin: 24px; background: var(--surface);
+  }
+  .dash-tab {
+    flex: 1; padding: 10px; text-align: center; cursor: pointer;
+    font-size: 0.83rem; font-weight: 500; color: var(--muted);
+    background: transparent; border: none; font-family: 'Inter', sans-serif;
+    transition: all 0.2s;
+  }
+  .dash-tab.active { background: var(--accent); color: #fff; }
+  .dash-content { padding: 0 24px 40px; }
+
+  /* ─── ACHAT ─── */
+  .buy-step { margin-bottom: 28px; }
+  .buy-step-title { font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; color: var(--muted); margin-bottom: 12px; }
+
+  .type-toggle { display: flex; gap: 12px; }
+  .type-btn {
+    flex: 1; padding: 14px; border-radius: 10px;
+    border: 2px solid var(--border); background: var(--card);
+    color: var(--text); cursor: pointer; text-align: center;
+    font-family: 'Inter', sans-serif; transition: all 0.2s;
+  }
+  .type-btn.active { border-color: var(--accent); background: rgba(108,99,255,0.1); }
+  .type-btn-name { font-weight: 600; font-size: 0.9rem; }
+  .type-btn-desc { font-size: 0.75rem; color: var(--muted); margin-top: 4px; }
+
+  .country-select-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .country-select-btn {
+    padding: 10px 12px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--card);
+    color: var(--text); cursor: pointer; display: flex; align-items: center; gap: 8px;
+    font-family: 'Inter', sans-serif; font-size: 0.83rem; font-weight: 500;
+    transition: all 0.2s;
+  }
+  .country-select-btn:hover { border-color: var(--accent); }
+  .country-select-btn.active { border-color: var(--accent); background: rgba(108,99,255,0.1); color: var(--accent); }
+
+  .price-box {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 20px; display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 12px;
+  }
+  .price-amount { font-family: 'Space Grotesk', sans-serif; font-size: 1.8rem; font-weight: 700; color: var(--accent); }
+  .price-label { font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
+
+  /* ─── SMS BOX ─── */
+  .sms-box {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px; min-height: 200px;
+  }
+  .sms-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+  .sms-live { display: flex; align-items: center; gap: 6px; font-size: 0.78rem; color: var(--green); }
+  .sms-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  .sms-number { font-family: 'Space Grotesk', sans-serif; font-size: 1.1rem; font-weight: 600; color: var(--accent2); }
+  .sms-empty { text-align: center; padding: 40px 0; color: var(--muted); font-size: 0.88rem; }
+  .sms-item {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 14px; margin-bottom: 8px;
+  }
+  .sms-from { font-size: 0.75rem; color: var(--muted); margin-bottom: 4px; }
+  .sms-code { font-family: 'Space Grotesk', sans-serif; font-size: 1.4rem; font-weight: 700; color: var(--green); letter-spacing: 2px; }
+  .sms-text { font-size: 0.82rem; color: var(--muted); margin-top: 4px; }
+  .sms-time { font-size: 0.72rem; color: var(--muted); margin-top: 6px; }
+
+  /* ─── MES NUMÉROS ─── */
+  .num-card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 18px; margin-bottom: 12px;
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  }
+  .num-flag { font-size: 1.8rem; }
+  .num-info { flex: 1; }
+  .num-value { font-family: 'Space Grotesk', sans-serif; font-size: 1.1rem; font-weight: 600; }
+  .num-meta { font-size: 0.78rem; color: var(--muted); margin-top: 4px; }
+  .num-status { padding: 4px 10px; border-radius: 20px; font-size: 0.72rem; font-weight: 600; }
+  .status-active { background: rgba(34,211,160,0.12); color: var(--green); }
+  .status-expired { background: rgba(255,77,109,0.12); color: var(--red); }
+  .num-actions { display: flex; gap: 8px; }
+
+  /* ─── CGU ─── */
+  .cgu-box {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 24px; font-size: 0.84rem;
+    line-height: 1.8; color: #9ca3af; max-height: 400px; overflow-y: auto;
+  }
+  .cgu-box h4 { color: var(--text); margin: 16px 0 6px; font-size: 0.9rem; }
+  .cgu-box h4:first-child { margin-top: 0; }
+
+  /* ─── TOAST ─── */
+  #toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(80px);
+    background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text); padding: 12px 20px; border-radius: 10px;
+    font-size: 0.85rem; z-index: 300; transition: transform 0.3s;
+    white-space: nowrap;
+  }
+  #toast.show { transform: translateX(-50%) translateY(0); }
+  #toast.success { border-color: var(--green); color: var(--green); }
+  #toast.error { border-color: var(--red); color: var(--red); }
+
+  /* ─── FOOTER ─── */
+  footer {
+    border-top: 1px solid var(--border); padding: 24px;
+    text-align: center; color: var(--muted); font-size: 0.78rem;
+  }
+  footer a { color: var(--accent); text-decoration: none; }
+
+  /* ─── LOADING ─── */
+  .spinner { width: 20px; height: 20px; border: 2px solid rgba(255,255,255,0.2); border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite; display: inline-block; vertical-align: middle; margin-right: 8px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .alert { padding: 12px 16px; border-radius: 8px; font-size: 0.83rem; margin-bottom: 16px; }
+  .alert-error { background: rgba(255,77,109,0.1); border: 1px solid rgba(255,77,109,0.3); color: #ff8099; }
+  .alert-success { background: rgba(34,211,160,0.1); border: 1px solid rgba(34,211,160,0.3); color: var(--green); }
+
+  .renewal-info { font-size: 0.78rem; color: var(--muted); margin-top: 6px; }
+  .renewal-info span { color: var(--accent2); font-weight: 600; }
+
+  /* ─── CAROUSEL PROMO ─── */
+  .promo-carousel {
+    margin: 0 24px 32px;
+    position: relative;
+    overflow: hidden;
+    border-radius: 14px;
+    max-width: 860px;
+    margin-left: auto; margin-right: auto;
+  }
+  .promo-track {
+    display: flex;
+    transition: transform 0.5s ease;
+  }
+  .promo-slide {
+    min-width: 100%;
+    padding: 28px 32px;
+    border-radius: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .promo-slide-1 { background: linear-gradient(135deg, #1a1040 0%, #3b1f8c 100%); border: 1px solid rgba(108,99,255,0.4); }
+  .promo-slide-2 { background: linear-gradient(135deg, #0d2b1f 0%, #0e5c3a 100%); border: 1px solid rgba(34,211,160,0.4); }
+  .promo-slide-3 { background: linear-gradient(135deg, #2b1010 0%, #7c1d2e 100%); border: 1px solid rgba(255,77,109,0.4); }
+  .promo-text { flex: 1; }
+  .promo-tag { font-size: 0.7rem; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; opacity: 0.7; margin-bottom: 6px; }
+  .promo-title { font-family: 'Space Grotesk', sans-serif; font-size: 1.2rem; font-weight: 700; margin-bottom: 6px; }
+  .promo-desc { font-size: 0.82rem; color: rgba(240,240,245,0.7); }
+  .promo-emoji { font-size: 3rem; }
+  .promo-dots { display: flex; justify-content: center; gap: 6px; margin-top: 12px; }
+  .promo-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border); cursor: pointer; transition: background 0.2s; border: none; }
+  .promo-dot.active { background: var(--accent); }
+
+  /* ─── BANNIÈRES PUB DASHBOARD ─── */
+  .dash-banner {
+    background: linear-gradient(135deg, rgba(108,99,255,0.08), rgba(34,211,160,0.06));
+    border: 1px solid rgba(108,99,255,0.2);
+    border-radius: 12px;
+    padding: 14px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+  .dash-banner-text { font-size: 0.83rem; color: var(--muted); flex: 1; }
+  .dash-banner-text strong { color: var(--accent2); }
+  .dash-banner-btn {
+    padding: 7px 14px; border-radius: 8px; font-size: 0.78rem; font-weight: 600;
+    background: rgba(108,99,255,0.15); border: 1px solid rgba(108,99,255,0.35);
+    color: var(--accent2); cursor: pointer; white-space: nowrap;
+    font-family: 'Inter', sans-serif; transition: all 0.2s;
+  }
+  .dash-banner-btn:hover { background: rgba(108,99,255,0.28); }
+
+  /* ─── SECTION AUTRES SERVICES ─── */
+  .services-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; margin-bottom: 24px; }
+  .service-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+    transition: all 0.25s;
+  }
+  .service-card:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 6px 24px rgba(108,99,255,0.12); }
+  .service-card::before {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0; height: 2px;
+    background: linear-gradient(90deg, var(--accent), var(--green));
+    opacity: 0; transition: opacity 0.25s;
+  }
+  .service-card:hover::before { opacity: 1; }
+  .service-icon { font-size: 2rem; margin-bottom: 10px; }
+  .service-name { font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 0.95rem; margin-bottom: 6px; }
+  .service-desc { font-size: 0.78rem; color: var(--muted); line-height: 1.5; margin-bottom: 14px; }
+  .service-soon {
+    display: inline-block; padding: 3px 10px; border-radius: 20px;
+    font-size: 0.7rem; font-weight: 700; letter-spacing: 0.5px;
+    background: rgba(108,99,255,0.12); color: var(--accent2); border: 1px solid rgba(108,99,255,0.2);
+  }
+  .service-price {
+    display: inline-block; padding: 3px 10px; border-radius: 20px;
+    font-size: 0.7rem; font-weight: 700;
+    background: rgba(34,211,160,0.1); color: var(--green); border: 1px solid rgba(34,211,160,0.2);
+  }
+  .services-coming-banner {
+    background: rgba(108,99,255,0.06);
+    border: 1px dashed rgba(108,99,255,0.25);
+    border-radius: 10px;
+    padding: 14px 18px;
+    font-size: 0.82rem;
+    color: var(--muted);
+    text-align: center;
+  }
+  .services-coming-banner span { color: var(--accent2); font-weight: 600; }
+  .region-btn {
+    padding: 7px 14px; border-radius: 20px; font-size: 0.78rem; font-weight: 500;
+    background: var(--surface); border: 1px solid var(--border); color: var(--muted);
+    cursor: pointer; transition: all 0.2s; font-family: 'Inter', sans-serif;
+  }
+  .region-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .region-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .dash-region-btn {
+    padding: 6px 12px; border-radius: 16px; font-size: 0.75rem; font-weight: 500;
+    background: var(--surface); border: 1px solid var(--border); color: var(--muted);
+    cursor: pointer; transition: all 0.2s; font-family: 'Inter', sans-serif;
+  }
+  .dash-region-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .dash-region-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+</style>
+</head>
+<body>
+
+<!-- NAVBAR -->
+<nav>
+  <div class="logo">Numera<span>Virtum</span></div>
+  <div class="nav-actions" id="nav-actions">
+    <button class="btn btn-ghost" onclick="showModal('login')">Connexion</button>
+    <button class="btn btn-primary" onclick="showModal('register')">Créer un compte</button>
+  </div>
+  <div class="nav-actions" id="nav-user" style="display:none">
+    <button class="btn btn-ghost" onclick="showPage('dashboard')">Mon espace</button>
+    <button class="btn btn-ghost" onclick="logout()">Déconnexion</button>
+  </div>
+</nav>
+
+<!-- ══════════════════════════════════════════════
+     PAGE HOME
+══════════════════════════════════════════════ -->
+<div id="page-home" class="page active">
+  <div class="hero">
+    <div class="hero-badge">🌍 Disponible dans 60+ pays • Livraison instantanée</div>
+    <h1>Des numéros virtuels pour protéger votre identité</h1>
+    <p>Créez vos comptes en ligne sans exposer votre vrai numéro. Temporaire ou mensuel, recevez vos SMS de vérification en temps réel.</p>
+    <div class="hero-cta">
+      <button class="btn btn-primary" onclick="showModal('register')" style="padding:12px 28px;font-size:0.95rem">Commencer maintenant</button>
+      <button class="btn btn-ghost" onclick="scrollToPlans()" style="padding:12px 28px;font-size:0.95rem">Voir les offres</button>
+    </div>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="stat-num">60+</div><div class="stat-label">Pays disponibles</div></div>
+    <div class="stat"><div class="stat-num">&lt;10s</div><div class="stat-label">Livraison numéro</div></div>
+    <div class="stat"><div class="stat-num">24/7</div><div class="stat-label">SMS en direct</div></div>
+  </div>
+
+  <!-- CAROUSEL PROMO AFFICHES PUB -->
+  <div class="promo-carousel" id="promoCarousel">
+    <div class="promo-track" id="promoTrack">
+
+      <!-- AFFICHE 1 : Numéro virtuel -->
+      <div class="promo-slide promo-slide-1" style="padding:0;overflow:hidden;min-height:200px;align-items:stretch;">
+        <div style="flex:1;padding:28px 32px;display:flex;flex-direction:column;justify-content:center;z-index:1">
+          <div class="promo-tag" style="color:#a78bfa">🔥 Offre populaire</div>
+          <div class="promo-title" style="font-size:1.35rem;margin-bottom:10px">Ton numéro virtuel<br>en moins de 10 secondes</div>
+          <div class="promo-desc" style="margin-bottom:16px">WhatsApp · TikTok · PayPal · Telegram<br>60+ pays disponibles · Paiement en FCFA</div>
+          <div style="display:inline-flex;align-items:center;gap:8px;background:rgba(108,99,255,0.25);border:1px solid rgba(108,99,255,0.5);border-radius:8px;padding:8px 16px;width:fit-content">
+            <span style="font-size:1.1rem;font-weight:800;color:#fff">Dès 1 500 FCFA</span>
+          </div>
+        </div>
+        <!-- Personnage SVG -->
+        <div style="width:160px;min-width:140px;position:relative;display:flex;align-items:flex-end;justify-content:center">
+          <!-- Cercle déco derrière -->
+          <div style="position:absolute;bottom:-20px;right:-20px;width:180px;height:180px;border-radius:50%;background:rgba(108,99,255,0.18);"></div>
+          <svg viewBox="0 0 120 200" width="140" height="195" xmlns="http://www.w3.org/2000/svg" style="position:relative;z-index:2">
+            <!-- Corps -->
+            <rect x="35" y="100" width="50" height="65" rx="10" fill="#4f46e5"/>
+            <!-- Cou -->
+            <rect x="52" y="88" width="16" height="16" rx="4" fill="#f5c5a3"/>
+            <!-- Tête -->
+            <ellipse cx="60" cy="72" rx="22" ry="24" fill="#f5c5a3"/>
+            <!-- Cheveux -->
+            <ellipse cx="60" cy="52" rx="22" ry="10" fill="#2d1b00"/>
+            <rect x="38" y="52" width="6" height="16" rx="3" fill="#2d1b00"/>
+            <rect x="76" y="52" width="6" height="16" rx="3" fill="#2d1b00"/>
+            <!-- Yeux fermés (sourire) -->
+            <path d="M50 69 Q53 66 56 69" stroke="#8b5e3c" stroke-width="2" fill="none" stroke-linecap="round"/>
+            <path d="M64 69 Q67 66 70 69" stroke="#8b5e3c" stroke-width="2" fill="none" stroke-linecap="round"/>
+            <!-- Grand sourire -->
+            <path d="M50 79 Q60 90 70 79" stroke="#c0392b" stroke-width="2.5" fill="#fff" stroke-linecap="round"/>
+            <!-- Joues roses -->
+            <ellipse cx="46" cy="77" rx="5" ry="3" fill="rgba(255,100,100,0.25)"/>
+            <ellipse cx="74" cy="77" rx="5" ry="3" fill="rgba(255,100,100,0.25)"/>
+            <!-- Bras gauche (tendu vers téléphone) -->
+            <path d="M35 115 Q18 125 20 148" stroke="#4f46e5" stroke-width="12" fill="none" stroke-linecap="round"/>
+            <ellipse cx="20" cy="152" rx="7" ry="7" fill="#f5c5a3"/>
+            <!-- Bras droit (tient téléphone en avant) -->
+            <path d="M85 115 Q102 120 104 110" stroke="#4f46e5" stroke-width="12" fill="none" stroke-linecap="round"/>
+            <!-- Main droite -->
+            <ellipse cx="106" cy="107" rx="7" ry="7" fill="#f5c5a3"/>
+            <!-- Téléphone tenu -->
+            <rect x="90" y="88" width="26" height="42" rx="5" fill="#1e1b4b" stroke="#6c63ff" stroke-width="2"/>
+            <rect x="93" y="92" width="20" height="30" rx="3" fill="#312e81"/>
+            <!-- Écran téléphone avec signal -->
+            <circle cx="103" cy="104" r="5" fill="#22d3a0" opacity="0.9"/>
+            <path d="M100 107 Q103 102 106 107" stroke="#fff" stroke-width="1.5" fill="none"/>
+            <!-- Jambes -->
+            <rect x="40" y="163" width="16" height="30" rx="6" fill="#312e81"/>
+            <rect x="64" y="163" width="16" height="30" rx="6" fill="#312e81"/>
+            <!-- Chaussures -->
+            <ellipse cx="48" cy="195" rx="12" ry="5" fill="#1e1b4b"/>
+            <ellipse cx="72" cy="195" rx="12" ry="5" fill="#1e1b4b"/>
+          </svg>
+        </div>
+      </div>
+
+      <!-- AFFICHE 2 : Protection identité -->
+      <div class="promo-slide promo-slide-2" style="padding:0;overflow:hidden;min-height:200px;align-items:stretch;">
+        <div style="flex:1;padding:28px 32px;display:flex;flex-direction:column;justify-content:center;z-index:1">
+          <div class="promo-tag" style="color:#22d3a0">🛡️ Votre vie privée</div>
+          <div class="promo-title" style="font-size:1.35rem;margin-bottom:10px">Protégez votre<br>vrai numéro !</div>
+          <div class="promo-desc" style="margin-bottom:16px">Ne donnez plus jamais votre numéro personnel.<br>Un numéro virtuel = zéro risque pour vous.</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <span style="background:rgba(34,211,160,0.15);border:1px solid rgba(34,211,160,0.3);border-radius:6px;padding:4px 10px;font-size:0.75rem;color:#22d3a0">✅ Anonymat total</span>
+            <span style="background:rgba(34,211,160,0.15);border:1px solid rgba(34,211,160,0.3);border-radius:6px;padding:4px 10px;font-size:0.75rem;color:#22d3a0">✅ Livraison &lt;10s</span>
+          </div>
+        </div>
+        <!-- Personnage SVG version 2 (chemise verte) -->
+        <div style="width:160px;min-width:140px;position:relative;display:flex;align-items:flex-end;justify-content:center">
+          <div style="position:absolute;bottom:-20px;right:-20px;width:180px;height:180px;border-radius:50%;background:rgba(34,211,160,0.15);"></div>
+          <svg viewBox="0 0 120 200" width="140" height="195" xmlns="http://www.w3.org/2000/svg" style="position:relative;z-index:2">
+            <!-- Corps -->
+            <rect x="35" y="100" width="50" height="65" rx="10" fill="#065f46"/>
+            <!-- Cou -->
+            <rect x="52" y="88" width="16" height="16" rx="4" fill="#d4956a"/>
+            <!-- Tête -->
+            <ellipse cx="60" cy="72" rx="22" ry="24" fill="#d4956a"/>
+            <!-- Cheveux courts -->
+            <ellipse cx="60" cy="50" rx="22" ry="11" fill="#1a0a00"/>
+            <!-- Yeux -->
+            <ellipse cx="52" cy="70" rx="3.5" ry="4" fill="#3d2000"/>
+            <ellipse cx="68" cy="70" rx="3.5" ry="4" fill="#3d2000"/>
+            <ellipse cx="53" cy="69" rx="1.2" ry="1.5" fill="#fff"/>
+            <ellipse cx="69" cy="69" rx="1.2" ry="1.5" fill="#fff"/>
+            <!-- Sourire grand -->
+            <path d="M48 80 Q60 94 72 80" stroke="#a0522d" stroke-width="2" fill="#ffeaa0" stroke-linecap="round"/>
+            <!-- Dents -->
+            <rect x="53" y="81" width="14" height="6" rx="2" fill="#fff"/>
+            <!-- Joues -->
+            <ellipse cx="44" cy="78" rx="5" ry="3" fill="rgba(200,80,80,0.2)"/>
+            <ellipse cx="76" cy="78" rx="5" ry="3" fill="rgba(200,80,80,0.2)"/>
+            <!-- Bras gauche -->
+            <path d="M35 115 Q18 130 22 152" stroke="#065f46" stroke-width="12" fill="none" stroke-linecap="round"/>
+            <ellipse cx="22" cy="155" rx="7" ry="7" fill="#d4956a"/>
+            <!-- Bras droit tient téléphone levé -->
+            <path d="M85 112 Q105 105 107 95" stroke="#065f46" stroke-width="12" fill="none" stroke-linecap="round"/>
+            <ellipse cx="107" cy="91" rx="7" ry="7" fill="#d4956a"/>
+            <!-- Téléphone levé (écran face) -->
+            <rect x="92" y="70" width="26" height="44" rx="5" fill="#0f172a" stroke="#22d3a0" stroke-width="2"/>
+            <rect x="95" y="74" width="20" height="32" rx="3" fill="#134e4a"/>
+            <!-- Icône bouclier sur écran -->
+            <path d="M105 79 l6 3 v5 c0 4-6 7-6 7 s-6-3-6-7 v-5 z" fill="#22d3a0" opacity="0.9"/>
+            <path d="M102 87 l2 2 4-4" stroke="#fff" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+            <!-- Jambes -->
+            <rect x="40" y="163" width="16" height="30" rx="6" fill="#064e3b"/>
+            <rect x="64" y="163" width="16" height="30" rx="6" fill="#064e3b"/>
+            <ellipse cx="48" cy="195" rx="12" ry="5" fill="#022c22"/>
+            <ellipse cx="72" cy="195" rx="12" ry="5" fill="#022c22"/>
+          </svg>
+        </div>
+      </div>
+
+      <!-- AFFICHE 3 : Services à venir -->
+      <div class="promo-slide promo-slide-3" style="padding:0;overflow:hidden;min-height:200px;align-items:stretch;">
+        <div style="flex:1;padding:28px 32px;display:flex;flex-direction:column;justify-content:center;z-index:1">
+          <div class="promo-tag" style="color:#ff8099">🚀 Nouveautés</div>
+          <div class="promo-title" style="font-size:1.35rem;margin-bottom:10px">Emails, VPN, Comptes<br>Premium — Bientôt ici !</div>
+          <div class="promo-desc" style="margin-bottom:16px">Numera Virtum grandit pour vous offrir encore<br>plus de services digitaux au meilleur prix.</div>
+          <div style="display:inline-flex;align-items:center;gap:8px;background:rgba(255,77,109,0.15);border:1px solid rgba(255,77,109,0.35);border-radius:8px;padding:8px 16px;width:fit-content">
+            <span style="font-size:0.85rem;font-weight:700;color:#ff8099">Restez connecté 👀</span>
+          </div>
+        </div>
+        <!-- Personnage SVG version 3 (costume rouge) -->
+        <div style="width:160px;min-width:140px;position:relative;display:flex;align-items:flex-end;justify-content:center">
+          <div style="position:absolute;bottom:-20px;right:-20px;width:180px;height:180px;border-radius:50%;background:rgba(255,77,109,0.12);"></div>
+          <svg viewBox="0 0 120 200" width="140" height="195" xmlns="http://www.w3.org/2000/svg" style="position:relative;z-index:2">
+            <!-- Corps -->
+            <rect x="35" y="100" width="50" height="65" rx="10" fill="#9b1c2e"/>
+            <!-- Cravate -->
+            <polygon points="60,100 56,100 58,130 60,135 62,130 64,100" fill="#ff4d6d"/>
+            <!-- Cou -->
+            <rect x="52" y="88" width="16" height="16" rx="4" fill="#f5c5a3"/>
+            <!-- Tête -->
+            <ellipse cx="60" cy="72" rx="22" ry="24" fill="#f5c5a3"/>
+            <!-- Cheveux -->
+            <ellipse cx="60" cy="51" rx="21" ry="10" fill="#4a2c00"/>
+            <path d="M38 58 Q40 48 60 48 Q80 48 82 58" fill="#4a2c00"/>
+            <!-- Sourcils heureux -->
+            <path d="M48 63 Q52 60 56 63" stroke="#4a2c00" stroke-width="2" fill="none" stroke-linecap="round"/>
+            <path d="M64 63 Q68 60 72 63" stroke="#4a2c00" stroke-width="2" fill="none" stroke-linecap="round"/>
+            <!-- Yeux mi-fermés de joie -->
+            <path d="M49 69 Q52 65 56 69" stroke="#4a2c00" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+            <path d="M64 69 Q67 65 71 69" stroke="#4a2c00" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+            <!-- Sourire très large -->
+            <path d="M47 79 Q60 96 73 79" stroke="#c0392b" stroke-width="2" fill="#ffe4e4" stroke-linecap="round"/>
+            <rect x="51" y="80" width="18" height="7" rx="2" fill="#fff"/>
+            <!-- Joues roses vives -->
+            <ellipse cx="44" cy="77" rx="6" ry="4" fill="rgba(255,100,100,0.3)"/>
+            <ellipse cx="76" cy="77" rx="6" ry="4" fill="rgba(255,100,100,0.3)"/>
+            <!-- Bras gauche (pouce levé) -->
+            <path d="M35 115 Q15 120 14 140" stroke="#9b1c2e" stroke-width="12" fill="none" stroke-linecap="round"/>
+            <ellipse cx="14" cy="144" rx="7" ry="7" fill="#f5c5a3"/>
+            <!-- Pouce levé -->
+            <rect x="10" y="132" width="8" height="14" rx="4" fill="#f5c5a3"/>
+            <!-- Bras droit (tient téléphone) -->
+            <path d="M85 112 Q103 108 105 100" stroke="#9b1c2e" stroke-width="12" fill="none" stroke-linecap="round"/>
+            <ellipse cx="105" cy="96" rx="7" ry="7" fill="#f5c5a3"/>
+            <!-- Téléphone -->
+            <rect x="90" y="75" width="26" height="44" rx="5" fill="#1a0010" stroke="#ff4d6d" stroke-width="2"/>
+            <rect x="93" y="79" width="20" height="32" rx="3" fill="#4a0018"/>
+            <!-- Étoile / notif sur écran -->
+            <text x="103" y="100" text-anchor="middle" font-size="14" fill="#ff8099">★</text>
+            <circle cx="109" cy="81" r="4" fill="#ff4d6d"/>
+            <text x="109" y="84" text-anchor="middle" font-size="6" fill="#fff" font-weight="bold">3</text>
+            <!-- Jambes -->
+            <rect x="40" y="163" width="16" height="30" rx="6" fill="#7f1d1d"/>
+            <rect x="64" y="163" width="16" height="30" rx="6" fill="#7f1d1d"/>
+            <ellipse cx="48" cy="195" rx="12" ry="5" fill="#450a0a"/>
+            <ellipse cx="72" cy="195" rx="12" ry="5" fill="#450a0a"/>
+          </svg>
+        </div>
+      </div>
+
+    </div>
+    <div class="promo-dots">
+      <button class="promo-dot active" onclick="goToSlide(0)"></button>
+      <button class="promo-dot" onclick="goToSlide(1)"></button>
+      <button class="promo-dot" onclick="goToSlide(2)"></button>
+    </div>
+  </div>
+
+  <div class="section" id="plans-section">
+    <div class="section-title">Nos offres</div>
+    <div class="section-sub">Choisissez le type de numéro qui correspond à votre besoin</div>
+    <div class="plans-grid">
+      <div class="plan-card" onclick="showModal('register')">
+        <div class="plan-type">Usage unique</div>
+        <div class="plan-name">Numéro Temporaire</div>
+        <div class="plan-desc">Idéal pour créer un compte sur TikTok, PayPal, WhatsApp ou toute autre plateforme. Valable le temps de recevoir votre code.</div>
+        <div class="plan-badge badge-temp">À partir de 1 500 FCFA</div>
+      </div>
+      <div class="plan-card" onclick="showModal('register')">
+        <div class="plan-type">Abonnement mensuel</div>
+        <div class="plan-name">Numéro Mensuel</div>
+        <div class="plan-desc">Gardez votre numéro pendant 1 mois complet. Renouvelable 2 fois. Parfait pour maintenir l'accès à vos comptes.</div>
+        <div class="plan-badge badge-monthly">À partir de 8 000 FCFA</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Pays disponibles</div>
+    <div class="section-sub">Plus de 60 pays dans le monde · Choisissez selon la plateforme ciblée</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px">
+      <button class="region-btn active" onclick="filterRegionHome('Tous',this)">🌍 Tous</button>
+      <button class="region-btn" onclick="filterRegionHome('Europe',this)">🇪🇺 Europe</button>
+      <button class="region-btn" onclick="filterRegionHome('Amériques',this)">🌎 Amériques</button>
+      <button class="region-btn" onclick="filterRegionHome('Asie',this)">🌏 Asie</button>
+      <button class="region-btn" onclick="filterRegionHome('Afrique',this)">🌍 Afrique</button>
+      <button class="region-btn" onclick="filterRegionHome('Océanie',this)">🦘 Océanie</button>
+    </div>
+    <div class="countries-grid" id="home-countries"></div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Conditions Générales d'Utilisation</div>
+    <div class="section-sub">Lisez attentivement avant d'utiliser nos services</div>
+    <div class="cgu-box">
+      <h4>1. Objet</h4>
+      Numera Virtum est une plateforme de revente de numéros de téléphone virtuels. Le présent service est fourni à titre de réseau de communication uniquement.
+
+      <h4>2. Utilisation légale obligatoire</h4>
+      L'utilisateur s'engage formellement à utiliser les numéros virtuels obtenus via Numera Virtum exclusivement à des fins légales. Toute utilisation pour des activités frauduleuses, d'escroquerie, de harcèlement, de phishing, ou toute autre activité illicite est strictement interdite et entraînera la suspension immédiate du compte sans remboursement.
+
+      <h4>3. Responsabilité de l'utilisateur</h4>
+      L'utilisateur est seul responsable de l'usage qu'il fait des numéros virtuels fournis. Numera Virtum agit en qualité de revendeur technique et ne saurait être tenu responsable des actions commises par les utilisateurs avec les numéros attribués. Tout usage illégal relève de l'entière responsabilité de l'utilisateur.
+
+      <h4>4. Conservation des données</h4>
+      Numera Virtum conserve les logs de transactions (identité de l'acheteur, numéro attribué, date et heure d'achat) conformément à la réglementation en vigueur. Ces données pourront être communiquées aux autorités compétentes sur réquisition judiciaire.
+
+      <h4>5. Non-remboursement</h4>
+      En raison de la nature numérique du service, aucun remboursement ne sera accordé après attribution d'un numéro virtuel, sauf en cas de dysfonctionnement technique prouvé imputable à Numera Virtum.
+
+      <h4>6. Renouvellement</h4>
+      Les numéros mensuels sont renouvelables deux (2) fois maximum. Après deux renouvellements, l'utilisateur devra acquérir un nouveau numéro.
+
+      <h4>7. Suspension de compte</h4>
+      Numera Virtum se réserve le droit de suspendre ou supprimer tout compte en cas de violation des présentes CGU, sans préavis et sans remboursement.
+
+      <h4>8. Contact</h4>
+      Pour toute question : support@numeravirtum.com
+    </div>
+  </div>
+
+  <footer>
+    © 2025 Numera Virtum · <a href="#" onclick="scrollToCGU()">CGU</a> · support@numeravirtum.com
+  </footer>
+</div>
+
+<!-- ══════════════════════════════════════════════
+     PAGE DASHBOARD
+══════════════════════════════════════════════ -->
+<div id="page-dashboard" class="page">
+  <div class="dash-header">
+    <div>
+      <div style="font-family:'Space Grotesk',sans-serif;font-size:1.1rem;font-weight:600">Mon espace</div>
+      <div class="dash-welcome">Bienvenue, <span id="user-name-display">—</span></div>
+    </div>
+    <button class="btn btn-primary" onclick="showDashTab('buy')">+ Acheter un numéro</button>
+  </div>
+
+  <div class="dash-tabs">
+    <button class="dash-tab active" onclick="showDashTab('buy')">Acheter</button>
+    <button class="dash-tab" onclick="showDashTab('numbers')">Mes numéros</button>
+    <button class="dash-tab" onclick="showDashTab('sms')">Boîte SMS</button>
+    <button class="dash-tab" onclick="showDashTab('services')">Services</button>
+  </div>
+
+  <div class="dash-content">
+
+    <!-- TAB: ACHETER -->
+    <div id="tab-buy">
+      <!-- Bannière pub -->
+      <div class="dash-banner">
+        <div class="dash-banner-text">💡 <strong>Nouveau :</strong> Les emails temporaires arrivent bientôt sur Numera Virtum. Restez connecté !</div>
+        <button class="dash-banner-btn" onclick="showDashTab('services')">Voir les services →</button>
+      </div>
+      <div class="buy-step">
+        <div class="buy-step-title">1 · Type de numéro</div>
+        <div class="type-toggle">
+          <button class="type-btn active" id="type-temp" onclick="selectType('temp')">
+            <div class="type-btn-name">⚡ Temporaire</div>
+            <div class="type-btn-desc">Usage unique · Rapide</div>
+          </button>
+          <button class="type-btn" id="type-monthly" onclick="selectType('monthly')">
+            <div class="type-btn-name">📅 Mensuel</div>
+            <div class="type-btn-desc">1 mois · Renouvelable 2×</div>
+          </button>
+        </div>
+      </div>
+
+      <div class="buy-step">
+        <div class="buy-step-title">2 · Pays</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
+          <button class="dash-region-btn active" onclick="filterRegionDash('Tous',this)">🌍 Tous</button>
+          <button class="dash-region-btn" onclick="filterRegionDash('Europe',this)">🇪🇺 Europe</button>
+          <button class="dash-region-btn" onclick="filterRegionDash('Amériques',this)">🌎 Amériques</button>
+          <button class="dash-region-btn" onclick="filterRegionDash('Asie',this)">🌏 Asie</button>
+          <button class="dash-region-btn" onclick="filterRegionDash('Afrique',this)">🌍 Afrique</button>
+          <button class="dash-region-btn" onclick="filterRegionDash('Océanie',this)">🦘 Océanie</button>
+        </div>
+        <div class="country-select-grid" id="country-select-grid"></div>
+      </div>
+
+      <div class="buy-step" id="price-section" style="display:none">
+        <div class="buy-step-title">3 · Récapitulatif</div>
+        <div class="price-box">
+          <div>
+            <div class="price-amount" id="price-display">—</div>
+            <div class="price-label" id="price-desc">—</div>
+            <div class="renewal-info" id="renewal-info"></div>
+          </div>
+          <button class="btn btn-green" id="pay-btn" onclick="startPayment()" style="padding:12px 24px;font-size:0.9rem">
+            Payer avec FedaPay
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB: MES NUMÉROS -->
+    <div id="tab-numbers" style="display:none">
+      <div id="numbers-list"></div>
+    </div>
+
+    <!-- TAB: SERVICES -->
+    <div id="tab-services" style="display:none">
+      <!-- Bannière pub services -->
+      <div class="dash-banner" style="background:linear-gradient(135deg,rgba(34,211,160,0.06),rgba(108,99,255,0.06));border-color:rgba(34,211,160,0.2);">
+        <div class="dash-banner-text">🚀 <strong>Numera Virtum</strong> s'agrandit ! De nouveaux services digitaux arrivent pour répondre à tous vos besoins.</div>
+      </div>
+
+      <div style="font-family:'Space Grotesk',sans-serif;font-size:1.1rem;font-weight:600;margin-bottom:6px">Nos services</div>
+      <div style="font-size:0.82rem;color:var(--muted);margin-bottom:22px">Découvrez tous les services disponibles et à venir sur Numera Virtum</div>
+
+      <div class="services-grid">
+        <!-- Disponible -->
+        <div class="service-card">
+          <div class="service-icon">📱</div>
+          <div class="service-name">Numéros Virtuels</div>
+          <div class="service-desc">Numéros temporaires ou mensuels dans 60+ pays. Recevez vos SMS de vérification en temps réel.</div>
+          <span class="service-price">Dès 1 500 FCFA</span>
+        </div>
+        <!-- Bientôt -->
+        <div class="service-card">
+          <div class="service-icon">📧</div>
+          <div class="service-name">Emails Temporaires</div>
+          <div class="service-desc">Adresses email jetables pour toutes vos inscriptions. Aucune donnée personnelle exposée.</div>
+          <span class="service-soon">Bientôt disponible</span>
+        </div>
+        <div class="service-card">
+          <div class="service-icon">💬</div>
+          <div class="service-name">WhatsApp Business</div>
+          <div class="service-desc">Numéros virtuels dédiés à WhatsApp Business. Idéal pour les PME en Afrique de l'Ouest.</div>
+          <span class="service-soon">Bientôt disponible</span>
+        </div>
+        <div class="service-card">
+          <div class="service-icon">🎬</div>
+          <div class="service-name">Comptes Premium</div>
+          <div class="service-desc">Accès Netflix, Spotify, Canva et plus encore. En mode partagé ou individuel, au meilleur prix.</div>
+          <span class="service-soon">Bientôt disponible</span>
+        </div>
+        <div class="service-card">
+          <div class="service-icon">🔒</div>
+          <div class="service-name">Accès VPN</div>
+          <div class="service-desc">Naviguez de manière privée et sécurisée. Abonnements mensuels aux meilleurs fournisseurs.</div>
+          <span class="service-soon">Bientôt disponible</span>
+        </div>
+        <div class="service-card">
+          <div class="service-icon">📨</div>
+          <div class="service-name">SMS en Masse</div>
+          <div class="service-desc">Envoyez des campagnes SMS à vos clients. Parfait pour le marketing des petites entreprises.</div>
+          <span class="service-soon">Bientôt disponible</span>
+        </div>
+      </div>
+
+      <div class="services-coming-banner">
+        📣 Vous souhaitez être notifié dès qu'un nouveau service est disponible ?<br>
+        <span>Contactez-nous : support@numeravirtum.com</span>
+      </div>
+    </div>
+
+    <!-- TAB: SMS -->
+    <div id="tab-sms" style="display:none">
+      <div class="sms-box">
+        <div class="sms-header">
+          <div id="sms-number-title" class="sms-number">Sélectionnez un numéro actif</div>
+          <div class="sms-live"><div class="sms-dot"></div> En direct</div>
+        </div>
+        <div id="sms-select" style="margin-bottom:16px;display:none">
+          <select id="sms-num-picker" class="form-input" onchange="selectSmsNumber()" style="max-width:260px">
+            <option value="">— Choisir un numéro —</option>
+          </select>
+        </div>
+        <div id="sms-messages"><div class="sms-empty">📭 En attente de messages…<br><span style="font-size:0.75rem;margin-top:8px;display:block">Les SMS arriveront ici en temps réel</span></div></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════
+     MODALS
+══════════════════════════════════════════════ -->
+
+<!-- LOGIN -->
+<div class="modal-overlay" id="modal-login">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal('login')">✕</button>
+    <h3>Connexion</h3>
+    <div class="modal-sub">Accédez à votre espace Numera Virtum</div>
+    <div id="login-error"></div>
+    <button class="btn-google" onclick="loginGoogle()">
+      <svg viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+      Continuer avec Google
+    </button>
+    <div class="form-divider">ou</div>
+    <div class="form-group">
+      <label class="form-label">Email</label>
+      <input type="email" class="form-input" id="login-email" placeholder="votre@email.com">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Mot de passe</label>
+      <input type="password" class="form-input" id="login-password" placeholder="••••••••">
+    </div>
+    <button class="btn btn-primary btn-full" onclick="loginEmail()">Se connecter</button>
+    <div class="form-switch">Pas de compte ? <button class="link-btn" onclick="switchModal('login','register')">Créer un compte</button></div>
+  </div>
+</div>
+
+<!-- REGISTER -->
+<div class="modal-overlay" id="modal-register">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal('register')">✕</button>
+    <h3>Créer un compte</h3>
+    <div class="modal-sub">Rejoignez Numera Virtum gratuitement</div>
+    <div id="register-error"></div>
+    <button class="btn-google" onclick="loginGoogle()">
+      <svg viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+      Continuer avec Google
+    </button>
+    <div class="form-divider">ou</div>
+    <div class="form-group">
+      <label class="form-label">Nom complet</label>
+      <input type="text" class="form-input" id="register-name" placeholder="Jean Dupont">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Email</label>
+      <input type="email" class="form-input" id="register-email" placeholder="votre@email.com">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Mot de passe</label>
+      <input type="password" class="form-input" id="register-password" placeholder="Min. 8 caractères">
+    </div>
+    <button class="btn btn-primary btn-full" onclick="registerEmail()">Créer mon compte</button>
+    <div class="form-switch">Déjà un compte ? <button class="link-btn" onclick="switchModal('register','login')">Se connecter</button></div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div id="toast"></div>
+
+<script>
+// ══════════════════════════════════════════════
+// NOTICE DE SÉCURITÉ (visible dans la console)
+// ══════════════════════════════════════════════
+(function(){
+  const s = '%c🔐 Numera Virtum';
+  const d = '%cSite sécurisé. Si vous êtes un développeur, notez que ce fichier est un front-end statique. Pour une sécurité maximale, migrez les appels API vers un backend.';
+  console.log(s, 'color:#6c63ff;font-size:16px;font-weight:bold');
+  console.log(d, 'color:#9ca3af;font-size:12px');
+})();
+
+// ══════════════════════════════════════════════
+// SÉCURITÉ — FONCTIONS DE PROTECTION
+// ══════════════════════════════════════════════
+
+// Protection XSS : neutralise tout HTML dans les données externes
+function sanitize(str) {
+  if (str === null || str === undefined) return '';
+  const div = document.createElement('div');
+  div.appendChild(document.createTextNode(String(str)));
+  return div.innerHTML;
+}
+
+// Validation email stricte
+function isValidEmail(email) {
+  return /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/.test(email);
+}
+
+// Validation mot de passe renforcée
+function isStrongPassword(pass) {
+  if (pass.length < 8) return 'Mot de passe trop court (8 caractères minimum).';
+  if (!/[A-Z]/.test(pass) && !/[0-9]/.test(pass)) return 'Le mot de passe doit contenir au moins un chiffre ou une majuscule.';
+  return null; // valide
+}
+
+// Rate-limiting côté client : bloque les tentatives répétées
+const _rateLimiter = {
+  attempts: {},
+  MAX: 5,
+  WINDOW: 15 * 60 * 1000, // 15 minutes
+  check: function(action) {
+    const now = Date.now();
+    if (!this.attempts[action]) this.attempts[action] = [];
+    this.attempts[action] = this.attempts[action].filter(t => now - t < this.WINDOW);
+    if (this.attempts[action].length >= this.MAX) {
+      const wait = Math.ceil((this.WINDOW - (now - this.attempts[action][0])) / 60000);
+      return 'Trop de tentatives. Réessayez dans ' + wait + ' min.';
+    }
+    this.attempts[action].push(now);
+    return null; // OK
+  }
+};
+
+// Création d'éléments DOM sans innerHTML (protection XSS avancée)
+function createTextNode(tag, text, className) {
+  const el = document.createElement(tag);
+  if (className) el.className = className;
+  el.textContent = text;
+  return el;
+}
+
+// ══════════════════════════════════════════════
+// DATA
+// ══════════════════════════════════════════════
+const COUNTRIES = [
+  // Europe
+  { code:'fr', name:'France', flag:'🇫🇷', region:'Europe', tempPrice:5000, monthlyPrice:17000 },
+  { code:'uk', name:'Royaume-Uni', flag:'🇬🇧', region:'Europe', tempPrice:4000, monthlyPrice:15000 },
+  { code:'de', name:'Allemagne', flag:'🇩🇪', region:'Europe', tempPrice:3500, monthlyPrice:12000 },
+  { code:'es', name:'Espagne', flag:'🇪🇸', region:'Europe', tempPrice:3500, monthlyPrice:12000 },
+  { code:'it', name:'Italie', flag:'🇮🇹', region:'Europe', tempPrice:3500, monthlyPrice:12000 },
+  { code:'pt', name:'Portugal', flag:'🇵🇹', region:'Europe', tempPrice:3000, monthlyPrice:10000 },
+  { code:'be', name:'Belgique', flag:'🇧🇪', region:'Europe', tempPrice:3500, monthlyPrice:12000 },
+  { code:'nl', name:'Pays-Bas', flag:'🇳🇱', region:'Europe', tempPrice:3500, monthlyPrice:12000 },
+  { code:'ch', name:'Suisse', flag:'🇨🇭', region:'Europe', tempPrice:4000, monthlyPrice:15000 },
+  { code:'se', name:'Suède', flag:'🇸🇪', region:'Europe', tempPrice:3000, monthlyPrice:10000 },
+  { code:'no', name:'Norvège', flag:'🇳🇴', region:'Europe', tempPrice:3000, monthlyPrice:10000 },
+  { code:'dk', name:'Danemark', flag:'🇩🇰', region:'Europe', tempPrice:3000, monthlyPrice:10000 },
+  { code:'fi', name:'Finlande', flag:'🇫🇮', region:'Europe', tempPrice:3000, monthlyPrice:10000 },
+  { code:'pl', name:'Pologne', flag:'🇵🇱', region:'Europe', tempPrice:2500, monthlyPrice:9000 },
+  { code:'ro', name:'Roumanie', flag:'🇷🇴', region:'Europe', tempPrice:2500, monthlyPrice:9000 },
+  { code:'ua', name:'Ukraine', flag:'🇺🇦', region:'Europe', tempPrice:2000, monthlyPrice:8000 },
+  { code:'ru', name:'Russie', flag:'🇷🇺', region:'Europe', tempPrice:2000, monthlyPrice:8000 },
+  { code:'gr', name:'Grèce', flag:'🇬🇷', region:'Europe', tempPrice:2500, monthlyPrice:9000 },
+  { code:'at', name:'Autriche', flag:'🇦🇹', region:'Europe', tempPrice:3500, monthlyPrice:12000 },
+  { code:'cz', name:'Tchéquie', flag:'🇨🇿', region:'Europe', tempPrice:2500, monthlyPrice:9000 },
+  // Amérique du Nord
+  { code:'us', name:'États-Unis', flag:'🇺🇸', region:'Amériques', tempPrice:4000, monthlyPrice:15000 },
+  { code:'ca', name:'Canada', flag:'🇨🇦', region:'Amériques', tempPrice:3000, monthlyPrice:10000 },
+  { code:'mx', name:'Mexique', flag:'🇲🇽', region:'Amériques', tempPrice:2500, monthlyPrice:9000 },
+  // Amérique du Sud
+  { code:'br', name:'Brésil', flag:'🇧🇷', region:'Amériques', tempPrice:2500, monthlyPrice:9000 },
+  { code:'ar', name:'Argentine', flag:'🇦🇷', region:'Amériques', tempPrice:2000, monthlyPrice:8000 },
+  { code:'co', name:'Colombie', flag:'🇨🇴', region:'Amériques', tempPrice:2000, monthlyPrice:8000 },
+  { code:'cl', name:'Chili', flag:'🇨🇱', region:'Amériques', tempPrice:2000, monthlyPrice:8000 },
+  { code:'pe', name:'Pérou', flag:'🇵🇪', region:'Amériques', tempPrice:2000, monthlyPrice:8000 },
+  // Asie
+  { code:'in', name:'Inde', flag:'🇮🇳', region:'Asie', tempPrice:1500, monthlyPrice:8000 },
+  { code:'cn', name:'Chine', flag:'🇨🇳', region:'Asie', tempPrice:2000, monthlyPrice:9000 },
+  { code:'jp', name:'Japon', flag:'🇯🇵', region:'Asie', tempPrice:3000, monthlyPrice:12000 },
+  { code:'kr', name:'Corée du Sud', flag:'🇰🇷', region:'Asie', tempPrice:3000, monthlyPrice:12000 },
+  { code:'id', name:'Indonésie', flag:'🇮🇩', region:'Asie', tempPrice:1500, monthlyPrice:8000 },
+  { code:'ph', name:'Philippines', flag:'🇵🇭', region:'Asie', tempPrice:1500, monthlyPrice:8000 },
+  { code:'vn', name:'Vietnam', flag:'🇻🇳', region:'Asie', tempPrice:1500, monthlyPrice:8000 },
+  { code:'th', name:'Thaïlande', flag:'🇹🇭', region:'Asie', tempPrice:2000, monthlyPrice:8000 },
+  { code:'my', name:'Malaisie', flag:'🇲🇾', region:'Asie', tempPrice:2000, monthlyPrice:8000 },
+  { code:'pk', name:'Pakistan', flag:'🇵🇰', region:'Asie', tempPrice:1500, monthlyPrice:8000 },
+  { code:'bd', name:'Bangladesh', flag:'🇧🇩', region:'Asie', tempPrice:1500, monthlyPrice:8000 },
+  { code:'sa', name:'Arabie Saoudite', flag:'🇸🇦', region:'Asie', tempPrice:3000, monthlyPrice:12000 },
+  { code:'ae', name:'Émirats Arabes', flag:'🇦🇪', region:'Asie', tempPrice:3500, monthlyPrice:14000 },
+  { code:'tr', name:'Turquie', flag:'🇹🇷', region:'Asie', tempPrice:2000, monthlyPrice:8000 },
+  { code:'il', name:'Israël', flag:'🇮🇱', region:'Asie', tempPrice:3000, monthlyPrice:12000 },
+  { code:'kz', name:'Kazakhstan', flag:'🇰🇿', region:'Asie', tempPrice:2000, monthlyPrice:8000 },
+  // Afrique
+  { code:'ng', name:'Nigeria', flag:'🇳🇬', region:'Afrique', tempPrice:2000, monthlyPrice:8000 },
+  { code:'gh', name:'Ghana', flag:'🇬🇭', region:'Afrique', tempPrice:2500, monthlyPrice:8000 },
+  { code:'sn', name:'Sénégal', flag:'🇸🇳', region:'Afrique', tempPrice:1500, monthlyPrice:8000 },
+  { code:'ci', name:"Côte d'Ivoire", flag:'🇨🇮', region:'Afrique', tempPrice:1500, monthlyPrice:8000 },
+  { code:'cm', name:'Cameroun', flag:'🇨🇲', region:'Afrique', tempPrice:1500, monthlyPrice:8000 },
+  { code:'ke', name:'Kenya', flag:'🇰🇪', region:'Afrique', tempPrice:2000, monthlyPrice:8000 },
+  { code:'za', name:'Afrique du Sud', flag:'🇿🇦', region:'Afrique', tempPrice:2500, monthlyPrice:9000 },
+  { code:'eg', name:'Égypte', flag:'🇪🇬', region:'Afrique', tempPrice:2000, monthlyPrice:8000 },
+  { code:'ma', name:'Maroc', flag:'🇲🇦', region:'Afrique', tempPrice:2000, monthlyPrice:8000 },
+  { code:'dz', name:'Algérie', flag:'🇩🇿', region:'Afrique', tempPrice:2000, monthlyPrice:8000 },
+  { code:'tn', name:'Tunisie', flag:'🇹🇳', region:'Afrique', tempPrice:2000, monthlyPrice:8000 },
+  { code:'bj', name:'Bénin', flag:'🇧🇯', region:'Afrique', tempPrice:1500, monthlyPrice:8000 },
+  { code:'tg', name:'Togo', flag:'🇹🇬', region:'Afrique', tempPrice:1500, monthlyPrice:8000 },
+  { code:'ml', name:'Mali', flag:'🇲🇱', region:'Afrique', tempPrice:1500, monthlyPrice:8000 },
+  { code:'bf', name:'Burkina Faso', flag:'🇧🇫', region:'Afrique', tempPrice:1500, monthlyPrice:8000 },
+  { code:'tz', name:'Tanzanie', flag:'🇹🇿', region:'Afrique', tempPrice:2000, monthlyPrice:8000 },
+  { code:'ug', name:'Ouganda', flag:'🇺🇬', region:'Afrique', tempPrice:2000, monthlyPrice:8000 },
+  { code:'et', name:'Éthiopie', flag:'🇪🇹', region:'Afrique', tempPrice:2000, monthlyPrice:8000 },
+  // Océanie
+  { code:'au', name:'Australie', flag:'🇦🇺', region:'Océanie', tempPrice:4000, monthlyPrice:15000 },
+  { code:'nz', name:'Nouvelle-Zélande', flag:'🇳🇿', region:'Océanie', tempPrice:4000, monthlyPrice:15000 },
+];
+
+// ╔══════════════════════════════════════════════════════════╗
+// ║  SÉCURITÉ — Plus aucune clé API n'est présente ici.      ║
+// ║  FedaPay (clé secrète) et SMSPVA sont appelés uniquement ║
+// ║  depuis netlify/functions, jamais depuis ce fichier.     ║
+// ╚══════════════════════════════════════════════════════════╝
+
+// Correspondance codes pays Numera Virtum → codes pays SMSPVA (affichage uniquement ;
+// la vraie correspondance utilisée pour les appels API vit côté serveur)
+const COUNTRY_SMSPVA = {
+  fr:'fr', uk:'gb', de:'de', es:'es', it:'it',
+  pt:'pt', be:'be', nl:'nl', ch:'ch',
+  se:'se', no:'no', dk:'dk', fi:'fi', pl:'pl',
+  ro:'ro', ua:'ua', ru:'ru', gr:'gr', at:'at',
+  cz:'cz', us:'us', ca:'ca', mx:'mx', br:'br',
+  ar:'ar', co:'co', cl:'cl', pe:'pe', in:'in',
+  cn:'cn', jp:'jp', kr:'kr', id:'id', ph:'ph',
+  vn:'vn', th:'th', my:'my', pk:'pk', bd:'bd',
+  sa:'sa', ae:'ae', tr:'tr', il:'il', kz:'kz',
+  ng:'ng', gh:'gh', sn:'sn', ci:'ci', cm:'cm',
+  ke:'ke', za:'za', eg:'eg', ma:'ma', dz:'dz',
+  tn:'tn', bj:'bj', tg:'tg', ml:'ml', bf:'bf',
+  tz:'tz', ug:'ug', et:'et', au:'au', nz:'nz'
+};
+
+// ══════════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════════
+let currentUser = null;
+let selectedType = 'temp';
+let selectedCountry = null;
+let activeSmsPoll = null;
+let userNumbers = [];
+let numbers = []; // chargé depuis Firestore via /.netlify/functions/get-numbers, plus jamais depuis localStorage
+
+// Récupère le token Firebase de l'utilisateur connecté, pour authentifier
+// chaque appel à nos fonctions Netlify (qui vérifient ce token côté serveur).
+async function authHeader() {
+  if (!auth.currentUser) return {};
+  const token = await auth.currentUser.getIdToken();
+  return { 'Authorization': 'Bearer ' + token };
+}
+
+// ══════════════════════════════════════════════
+// INIT
+// ══════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded', () => {
+  renderHomeCountries();
+  renderCountrySelectGrid();
+
+  // Firebase restaure automatiquement la session ; on réagit à son état.
+  auth.onAuthStateChanged(async (user) => {
+    if (user) {
+      currentUser = { email: sanitize(user.email || ''), name: sanitize(user.displayName || '') };
+      await onLogin();
+    } else {
+      currentUser = null;
+    }
+  });
+
+  // Après un paiement, FedaPay redirige l'utilisateur vers cette page.
+  // Le webhook serveur peut prendre quelques secondes à traiter le paiement
+  // (achat du numéro sur SMSPVA), donc on rafraîchit la liste 2 fois.
+  if (window.location.search.includes('transaction_id') || window.location.search.includes('id=')) {
+    showToast('⏳ Vérification du paiement et attribution du numéro…', '');
+    setTimeout(() => { if (currentUser) loadNumbers(); }, 4000);
+    setTimeout(() => { if (currentUser) loadNumbers(); }, 10000);
+    window.history.replaceState({}, document.title, window.location.pathname);
+  }
+});
+
+// ══════════════════════════════════════════════
+// PAGES
+// ══════════════════════════════════════════════
+function showPage(page) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('page-' + page).classList.add('active');
+  window.scrollTo(0,0);
+  if (page === 'dashboard') {
+    renderNumbers();
+    loadSmsTab();
+  }
+}
+
+function scrollToPlans() {
+  document.getElementById('plans-section').scrollIntoView({ behavior:'smooth' });
+}
+function scrollToCGU() {
+  document.querySelector('.cgu-box').scrollIntoView({ behavior:'smooth' });
+}
+
+// ══════════════════════════════════════════════
+// MODALS
+// ══════════════════════════════════════════════
+function showModal(name) {
+  document.getElementById('modal-' + name).classList.add('open');
+}
+function closeModal(name) {
+  document.getElementById('modal-' + name).classList.remove('open');
+  clearAlert('login-error'); clearAlert('register-error');
+}
+function switchModal(from, to) {
+  closeModal(from); showModal(to);
+}
+document.querySelectorAll('.modal-overlay').forEach(o => {
+  o.addEventListener('click', e => { if(e.target === o) o.classList.remove('open'); });
+});
+
+// ══════════════════════════════════════════════
+// AUTH
+// ══════════════════════════════════════════════
+function loginGoogle() {
+  const provider = new firebase.auth.GoogleAuthProvider();
+  auth.signInWithPopup(provider)
+    .then(() => closeModal('login'))
+    .catch(err => showAlert('login-error', 'Connexion Google échouée : ' + err.message));
+}
+
+function loginEmail() {
+  const email = document.getElementById('login-email').value.trim();
+  const pass = document.getElementById('login-password').value;
+  if (!email || !pass) { showAlert('login-error', 'Remplissez tous les champs.'); return; }
+  if (!isValidEmail(email)) { showAlert('login-error', 'Adresse email invalide.'); return; }
+
+  auth.signInWithEmailAndPassword(email, pass)
+    .then(() => closeModal('login'))
+    .catch(() => showAlert('login-error', 'Email ou mot de passe incorrect.'));
+}
+
+function registerEmail() {
+  const name = document.getElementById('register-name').value.trim();
+  const email = document.getElementById('register-email').value.trim();
+  const pass = document.getElementById('register-password').value;
+  if (!name || !email || !pass) { showAlert('register-error', 'Remplissez tous les champs.'); return; }
+  if (!isValidEmail(email)) { showAlert('register-error', 'Adresse email invalide.'); return; }
+
+  const passError = isStrongPassword(pass);
+  if (passError) { showAlert('register-error', passError); return; }
+  if (name.length > 100) { showAlert('register-error', 'Nom trop long.'); return; }
+
+  auth.createUserWithEmailAndPassword(email, pass)
+    .then(cred => cred.user.updateProfile({ displayName: sanitize(name) }))
+    .then(() => closeModal('register'))
+    .catch(err => {
+      const msg = err.code === 'auth/email-already-in-use'
+        ? 'Cet email est déjà utilisé.'
+        : 'Erreur lors de la création du compte.';
+      showAlert('register-error', msg);
+    });
+}
+
+async function onLogin() {
+  document.getElementById('nav-actions').style.display = 'none';
+  document.getElementById('nav-user').style.display = 'flex';
+  document.getElementById('user-name-display').textContent = sanitize(currentUser.name || currentUser.email);
+  showPage('dashboard');
+  showToast('Bienvenue ' + (currentUser.name || '') + ' !', 'success');
+  await loadNumbers();
+}
+
+function logout() {
+  auth.signOut();
+  currentUser = null;
+  numbers = [];
+  if (activeSmsPoll) clearInterval(activeSmsPoll);
+  document.getElementById('nav-actions').style.display = 'flex';
+  document.getElementById('nav-user').style.display = 'none';
+  showPage('home');
+}
+
+// Charge les numéros de l'utilisateur connecté depuis Firestore (via la fonction serveur)
+async function loadNumbers() {
+  try {
+    const headers = await authHeader();
+    const res = await fetch('/.netlify/functions/get-numbers', { headers });
+    const data = await res.json();
+    numbers = data.numbers || [];
+    userNumbers = numbers;
+    renderNumbers();
+  } catch (e) {
+    console.error('Erreur chargement numéros:', e);
+  }
+}
+
+// ══════════════════════════════════════════════
+// DASHBOARD TABS
+// ══════════════════════════════════════════════
+function showDashTab(tab) {
+  ['buy','numbers','sms','services'].forEach(t => {
+    document.getElementById('tab-' + t).style.display = t === tab ? 'block' : 'none';
+  });
+  document.querySelectorAll('.dash-tab').forEach((btn, i) => {
+    btn.classList.toggle('active', ['buy','numbers','sms','services'][i] === tab);
+  });
+  if (tab === 'numbers') renderNumbers();
+  if (tab === 'sms') loadSmsTab();
+}
+
+// ══════════════════════════════════════════════
+// CAROUSEL PROMO
+// ══════════════════════════════════════════════
+let currentSlide = 0;
+const totalSlides = 3;
+
+function goToSlide(index) {
+  currentSlide = index;
+  const track = document.getElementById('promoTrack');
+  if (track) track.style.transform = `translateX(-${index * 100}%)`;
+  document.querySelectorAll('.promo-dot').forEach((dot, i) => {
+    dot.classList.toggle('active', i === index);
+  });
+}
+
+function nextSlide() {
+  goToSlide((currentSlide + 1) % totalSlides);
+}
+
+// Auto-avance toutes les 4 secondes
+setInterval(nextSlide, 4000);
+
+// ══════════════════════════════════════════════
+// ACHAT
+// ══════════════════════════════════════════════
+function renderHomeCountries(filterReg) {
+  filterReg = filterReg || 'Tous';
+  const grid = document.getElementById('home-countries');
+  const filtered = filterReg === 'Tous' ? COUNTRIES : COUNTRIES.filter(function(c){ return c.region === filterReg; });
+  grid.innerHTML = filtered.map(function(c){ return '<div class="country-card"><div class="country-flag">'+c.flag+'</div><div class="country-info"><div class="country-name">'+c.name+'</div><div class="country-price">Temp: '+fmt(c.tempPrice)+' · Mensuel: '+fmt(c.monthlyPrice)+'</div></div></div>'; }).join('');
+}
+
+function filterRegionHome(r, el) {
+  document.querySelectorAll('.region-btn').forEach(function(b){ b.classList.remove('active'); });
+  el.classList.add('active');
+  renderHomeCountries(r);
+}
+
+function renderCountrySelectGrid(filterReg) {
+  filterReg = filterReg || 'Tous';
+  const grid = document.getElementById('country-select-grid');
+  const filtered = filterReg === 'Tous' ? COUNTRIES : COUNTRIES.filter(function(c){ return c.region === filterReg; });
+  grid.innerHTML = filtered.map(function(c){ return '<button class="country-select-btn" id="cbtn-'+c.code+'" onclick="selectCountry(\''+c.code+'\')">'+c.flag+' '+c.name+'</button>'; }).join('');
+  if (selectedCountry) {
+    const btn = document.getElementById('cbtn-' + selectedCountry.code);
+    if (btn) btn.classList.add('active');
+  }
+}
+
+function filterRegionDash(r, el) {
+  document.querySelectorAll('.dash-region-btn').forEach(function(b){ b.classList.remove('active'); });
+  el.classList.add('active');
+  renderCountrySelectGrid(r);
+}
+
+function selectType(type) {
+  selectedType = type;
+  document.getElementById('type-temp').classList.toggle('active', type === 'temp');
+  document.getElementById('type-monthly').classList.toggle('active', type === 'monthly');
+  if (selectedCountry) updatePriceBox();
+}
+
+function selectCountry(code) {
+  selectedCountry = COUNTRIES.find(c => c.code === code);
+  document.querySelectorAll('.country-select-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('cbtn-' + code).classList.add('active');
+  updatePriceBox();
+}
+
+function updatePriceBox() {
+  const c = selectedCountry;
+  const isMonthly = selectedType === 'monthly';
+  const price = isMonthly ? c.monthlyPrice : c.tempPrice;
+  document.getElementById('price-display').textContent = fmt(price);
+  document.getElementById('price-desc').textContent =
+    `Numéro ${isMonthly ? 'mensuel' : 'temporaire'} • ${c.flag} ${c.name}`;
+  document.getElementById('renewal-info').innerHTML =
+    isMonthly ? 'Renouvelable <span>2 fois</span> maximum' : 'Usage unique · Valable jusqu\'à réception du code';
+  document.getElementById('price-section').style.display = 'block';
+}
+
+function fmt(n) { return n.toLocaleString('fr-FR') + ' FCFA'; }
+
+// ══════════════════════════════════════════════
+// PAIEMENT FEDAPAY
+// ══════════════════════════════════════════════
+function startPayment() {
+  if (!selectedCountry) { showToast('Choisissez un pays.', 'error'); return; }
+  if (!currentUser) { showModal('login'); return; }
+  launchPayment(selectedCountry.code, selectedType, null);
+}
+
+// Lance un paiement (achat ou renouvellement) : la création de la transaction
+// FedaPay et son prix sont entièrement gérés côté serveur, le front ne fait
+// que rediriger l'utilisateur vers la page de paiement sécurisée FedaPay.
+async function launchPayment(countryCode, type, renewNumberId) {
+  try {
+    showToast('⏳ Préparation du paiement…', '');
+    const headers = await authHeader();
+    const res = await fetch('/.netlify/functions/create-transaction', {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ countryCode, type, renewNumberId })
+    });
+    const data = await res.json();
+    if (!res.ok || !data.paymentUrl) {
+      showToast('❌ ' + (data.error || 'Erreur lors de la création du paiement.'), 'error');
+      return;
+    }
+    // Redirection vers la page de paiement FedaPay hébergée par FedaPay.
+    // Une fois le paiement confirmé, FedaPay notifie notre serveur (webhook),
+    // qui achète alors le numéro sur SMSPVA et l'ajoute au compte de l'utilisateur.
+    window.location.href = data.paymentUrl;
+  } catch (err) {
+    showToast('❌ Erreur réseau lors du paiement.', 'error');
+  }
+}
+
+// ══════════════════════════════════════════════
+// MES NUMÉROS
+// ══════════════════════════════════════════════
+function renderNumbers() {
+  if (!currentUser) return;
+  const myNums = numbers;
+  userNumbers = myNums;
+  const list = document.getElementById('numbers-list');
+
+  if (!myNums.length) {
+    list.innerHTML = `<div style="text-align:center;padding:60px 0;color:var(--muted)">📱 Aucun numéro pour l'instant.<br><button class="link-btn" style="margin-top:12px" onclick="showDashTab('buy')">Acheter un numéro</button></div>`;
+    return;
+  }
+
+  // Construction DOM sécurisée pour éviter les injections XSS depuis le localStorage
+  list.innerHTML = '';
+  myNums.forEach(n => {
+    const expired = Date.now() > n.expiresAt;
+    const timeLeft = expired ? 'Expiré' : timeRemaining(n.expiresAt);
+    const canRenew = n.type === 'monthly' && !expired && n.renewalsLeft > 0;
+
+    const card = document.createElement('div');
+    card.className = 'num-card';
+
+    // Flag + infos
+    const flagDiv = document.createElement('div');
+    flagDiv.className = 'num-flag';
+    flagDiv.textContent = sanitize(n.flag);
+    card.appendChild(flagDiv);
+
+    const infoDiv = document.createElement('div');
+    infoDiv.className = 'num-info';
+
+    const numVal = document.createElement('div');
+    numVal.className = 'num-value';
+    numVal.textContent = sanitize(n.number);
+    infoDiv.appendChild(numVal);
+
+    const numMeta = document.createElement('div');
+    numMeta.className = 'num-meta';
+    numMeta.textContent = sanitize(n.countryName) + ' · ' + (n.type === 'monthly' ? 'Mensuel' : 'Temporaire') + ' · ' + timeLeft;
+    infoDiv.appendChild(numMeta);
+
+    if (n.type === 'monthly') {
+      const renewDiv = document.createElement('div');
+      renewDiv.className = 'renewal-info';
+      renewDiv.textContent = 'Renouvellements restants : ';
+      const renewSpan = document.createElement('span');
+      renewSpan.textContent = String(parseInt(n.renewalsLeft) || 0) + '/2';
+      renewDiv.appendChild(renewSpan);
+      infoDiv.appendChild(renewDiv);
+    }
+    card.appendChild(infoDiv);
+
+    const actionsWrap = document.createElement('div');
+    actionsWrap.style.cssText = 'display:flex;flex-direction:column;gap:8px;align-items:flex-end';
+
+    const statusSpan = document.createElement('span');
+    statusSpan.className = 'num-status ' + (expired ? 'status-expired' : 'status-active');
+    statusSpan.textContent = expired ? 'Expiré' : 'Actif';
+    actionsWrap.appendChild(statusSpan);
+
+    const numActions = document.createElement('div');
+    numActions.className = 'num-actions';
+
+    if (!expired) {
+      const smsBtn = document.createElement('button');
+      smsBtn.className = 'btn btn-ghost';
+      smsBtn.style.cssText = 'font-size:0.75rem;padding:6px 12px';
+      smsBtn.textContent = 'SMS';
+      const safeId = sanitize(n.id);
+      smsBtn.addEventListener('click', function() { viewSms(safeId); });
+      numActions.appendChild(smsBtn);
+    }
+    if (canRenew) {
+      const renewBtn = document.createElement('button');
+      renewBtn.className = 'btn btn-primary';
+      renewBtn.style.cssText = 'font-size:0.75rem;padding:6px 12px';
+      renewBtn.textContent = 'Renouveler';
+      const safeId = sanitize(n.id);
+      renewBtn.addEventListener('click', function() { renewNumber(safeId); });
+      numActions.appendChild(renewBtn);
+    }
+    actionsWrap.appendChild(numActions);
+    card.appendChild(actionsWrap);
+    list.appendChild(card);
+  });
+}
+
+function timeRemaining(expiry) {
+  const ms = expiry - Date.now();
+  if (ms <= 0) return 'Expiré';
+  const h = Math.floor(ms / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  if (h >= 24) return Math.floor(h/24) + 'j ' + (h%24) + 'h';
+  return h + 'h ' + m + 'min';
+}
+
+function renewNumber(id) {
+  const num = numbers.find(n => n.id === id);
+  if (!num || num.renewalsLeft <= 0) return;
+  launchPayment(num.country, 'monthly', id);
+}
+
+// ══════════════════════════════════════════════
+// SMS EN TEMPS RÉEL
+// ══════════════════════════════════════════════
+function loadSmsTab() {
+  if (!currentUser) return;
+  const myActive = numbers.filter(n => Date.now() < n.expiresAt);
+  const picker = document.getElementById('sms-num-picker');
+  // Construction sécurisée du select sans innerHTML (protection XSS)
+  picker.innerHTML = '';
+  const defaultOpt = document.createElement('option');
+  defaultOpt.value = '';
+  defaultOpt.textContent = '— Choisir un numéro —';
+  picker.appendChild(defaultOpt);
+  myActive.forEach(n => {
+    const opt = document.createElement('option');
+    opt.value = sanitize(n.id);
+    opt.textContent = sanitize(n.flag) + ' ' + sanitize(n.number);
+    picker.appendChild(opt);
+  });
+
+  if (myActive.length > 0) {
+    document.getElementById('sms-select').style.display = 'block';
+  }
+}
+
+function viewSms(id) {
+  showDashTab('sms');
+  document.getElementById('sms-num-picker').value = id;
+  selectSmsNumber();
+}
+
+function selectSmsNumber() {
+  const id = document.getElementById('sms-num-picker').value;
+  if (activeSmsPoll) clearInterval(activeSmsPoll);
+
+  if (!id) {
+    document.getElementById('sms-number-title').textContent = 'Sélectionnez un numéro actif';
+    document.getElementById('sms-messages').innerHTML = '<div class="sms-empty">📭 En attente de messages…</div>';
+    return;
+  }
+
+  const num = numbers.find(n => n.id === id);
+  if (!num) return;
+
+  document.getElementById('sms-number-title').textContent = num.flag + ' ' + num.number;
+  fetchSms(num);
+  // Rafraîchissement toutes les 8 secondes
+  activeSmsPoll = setInterval(() => fetchSms(num), 8000);
+}
+
+async function fetchSms(num) {
+  const box = document.getElementById('sms-messages');
+
+  try {
+    const headers = await authHeader();
+    const response = await fetch(
+      `/.netlify/functions/get-sms?numberId=${encodeURIComponent(num.id)}`,
+      { headers }
+    );
+    if (!response.ok) throw new Error('Erreur ' + response.status);
+
+    const data = await response.json();
+
+    if (!data.received) {
+      box.innerHTML = '<div class="sms-empty">📭 En attente du SMS… (actualisation toutes les 8s)</div>';
+      return;
+    }
+
+    // Sanitisation des données reçues (protection XSS)
+    const smsText = sanitize(data.sms || '');
+    const code = data.code || '';
+    const safeService = sanitize(data.service || 'Inconnu');
+    const safeTime = new Date().toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'});
+
+    const item = document.createElement('div');
+    item.className = 'sms-item';
+
+    const fromDiv = document.createElement('div');
+    fromDiv.className = 'sms-from';
+    fromDiv.textContent = 'De : ' + safeService;
+    item.appendChild(fromDiv);
+
+    if (code) {
+      const codeDiv = document.createElement('div');
+      codeDiv.className = 'sms-code';
+      codeDiv.textContent = code;
+      item.appendChild(codeDiv);
+    }
+
+    const textDiv = document.createElement('div');
+    textDiv.className = 'sms-text';
+    textDiv.textContent = smsText;
+    item.appendChild(textDiv);
+
+    const timeDiv = document.createElement('div');
+    timeDiv.className = 'sms-time';
+    timeDiv.textContent = safeTime;
+    item.appendChild(timeDiv);
+
+    box.innerHTML = '';
+    box.appendChild(item);
+
+  } catch (err) {
+    console.error('Erreur SMS:', err);
+    box.innerHTML = '<div class="sms-empty">⚠️ Impossible de charger les SMS.</div>';
+  }
+}
+
+// ══════════════════════════════════════════════
+// UI HELPERS
+// ══════════════════════════════════════════════
+function showToast(msg, type='') {
+  const t = document.getElementById('toast');
+  t.textContent = sanitize(String(msg));
+  t.className = type ? 'show ' + type : 'show';
+  setTimeout(() => t.className = '', 3500);
+}
+
+function showAlert(id, msg) {
+  document.getElementById(id).innerHTML = `<div class="alert alert-error">${msg}</div>`;
+}
+function clearAlert(id) {
+  const el = document.getElementById(id);
+  if (el) el.innerHTML = '';
+}
+</script>
+</body>
+</html>
