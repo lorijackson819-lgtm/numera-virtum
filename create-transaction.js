@@ -46,10 +46,18 @@ exports.handler = async (event) => {
       })
     });
     const txData = await txRes.json();
-    if (!txRes.ok || !txData.v1_transaction) {
-      return { statusCode: 502, body: JSON.stringify({ error: 'Erreur création paiement FedaPay.' }) };
+    // La réponse de FedaPay place l'id directement à la racine (txData.id),
+    // pas dans un sous-objet "v1_transaction".
+    const transactionId = txData?.id || txData?.v1_transaction?.id;
+    if (!txRes.ok || !transactionId) {
+      return {
+        statusCode: 502,
+        body: JSON.stringify({
+          error: 'Erreur création paiement FedaPay.',
+          details: txData
+        })
+      };
     }
-    const transactionId = txData.v1_transaction.id;
 
     // 2) Génération du lien de paiement (token)
     const tokenRes = await fetch(`${FEDAPAY_API}/transactions/${transactionId}/token`, {
@@ -88,3 +96,4 @@ exports.handler = async (event) => {
     };
   }
 };
+  
