@@ -29,7 +29,6 @@ exports.handler = async (event) => {
     }
     const amount = type === 'monthly' ? country.monthlyPrice : country.tempPrice;
 
-    // 1) Création de la transaction FedaPay côté serveur
     const txRes = await fetch(`${FEDAPAY_API}/transactions`, {
       method: 'POST',
       headers: {
@@ -44,7 +43,7 @@ exports.handler = async (event) => {
       })
     });
     const txData = await txRes.json();
-    const transactionId = txData?.id || txData?.v1_transaction?.id;
+    const transactionId = txData?.id || txData?.['v1/transaction']?.id || txData?.v1_transaction?.id;
     if (!txRes.ok || !transactionId) {
       console.log('FEDAPAY_TX_ERROR', txRes.status, JSON.stringify(txData));
       return {
@@ -56,19 +55,17 @@ exports.handler = async (event) => {
       };
     }
 
-    // 2) Génération du lien de paiement (token)
     const tokenRes = await fetch(`${FEDAPAY_API}/transactions/${transactionId}/token`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${FEDAPAY_SECRET_KEY}` }
     });
     const tokenData = await tokenRes.json();
-    const paymentUrl = tokenData?.url;
+    const paymentUrl = tokenData?.url || tokenData?.token?.url || tokenData?.['v1/token']?.url;
     if (!paymentUrl) {
       console.log('FEDAPAY_TOKEN_ERROR', tokenRes.status, JSON.stringify(tokenData));
       return { statusCode: 502, body: JSON.stringify({ error: 'Erreur génération lien de paiement.' }) };
     }
 
-    // 3) On enregistre une "commande en attente" dans Firestore.
     await db.collection('pendingOrders').doc(String(transactionId)).set({
       uid: user.uid,
       email: user.email,
