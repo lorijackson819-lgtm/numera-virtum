@@ -22,8 +22,6 @@ exports.handler = async (event) => {
       return { statusCode: 400, body: JSON.stringify({ error: 'Paramètres invalides.' }) };
     }
 
-    // Le prix est lu côté serveur (fichier countries.js), jamais fait confiance au front,
-    // pour empêcher un client de modifier le prix avant l'envoi.
     const { COUNTRIES } = require('./_countries');
     const country = COUNTRIES.find(c => c.code === countryCode);
     if (!country) {
@@ -46,10 +44,9 @@ exports.handler = async (event) => {
       })
     });
     const txData = await txRes.json();
-    // La réponse de FedaPay place l'id directement à la racine (txData.id),
-    // pas dans un sous-objet "v1_transaction".
     const transactionId = txData?.id || txData?.v1_transaction?.id;
     if (!txRes.ok || !transactionId) {
+      console.log('FEDAPAY_TX_ERROR', txRes.status, JSON.stringify(txData));
       return {
         statusCode: 502,
         body: JSON.stringify({
@@ -67,12 +64,11 @@ exports.handler = async (event) => {
     const tokenData = await tokenRes.json();
     const paymentUrl = tokenData?.url;
     if (!paymentUrl) {
+      console.log('FEDAPAY_TOKEN_ERROR', tokenRes.status, JSON.stringify(tokenData));
       return { statusCode: 502, body: JSON.stringify({ error: 'Erreur génération lien de paiement.' }) };
     }
 
     // 3) On enregistre une "commande en attente" dans Firestore.
-    // C'est CE document, écrit côté serveur, qui sera utilisé par le webhook
-    // pour savoir quoi acheter sur SMSPVA une fois le paiement confirmé.
     await db.collection('pendingOrders').doc(String(transactionId)).set({
       uid: user.uid,
       email: user.email,
@@ -96,4 +92,3 @@ exports.handler = async (event) => {
     };
   }
 };
-  
