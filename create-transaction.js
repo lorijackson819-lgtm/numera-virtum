@@ -83,12 +83,19 @@ exports.handler = async (event) => {
       })
     });
     const txData = await txRes.json();
-    if (!txRes.ok || !txData.v1_transaction) {
-      console.error('FedaPay erreur:', JSON.stringify(txData));
-      return { statusCode: 502, body: JSON.stringify({ error: 'Erreur FedaPay: ' + (txData.message || JSON.stringify(txData)) }) };
+
+    // ⚠️ FedaPay renvoie une clé JSON nommée "v1/transaction" (avec un SLASH),
+    // pas "v1_transaction" (underscore) — accès obligatoire via crochets.
+    const txObj = txData['v1/transaction'];
+
+    if (!txRes.ok || !txObj) {
+      console.error('FedaPay erreur (création transaction):', JSON.stringify(txData));
+      return {
+        statusCode: 502,
+        body: JSON.stringify({ error: 'Erreur FedaPay: ' + (txData.message || JSON.stringify(txData)) })
+      };
     }
-    }
-    const transactionId = txData.v1_transaction.id;
+    const transactionId = txObj.id;
 
     // 2) Génération du lien de paiement (token)
     const tokenRes = await fetch(`${FEDAPAY_API}/transactions/${transactionId}/token`, {
@@ -98,7 +105,11 @@ exports.handler = async (event) => {
     const tokenData = await tokenRes.json();
     const paymentUrl = tokenData?.url;
     if (!paymentUrl) {
-      return { statusCode: 502, body: JSON.stringify({ error: 'Erreur génération lien de paiement.' }) };
+      console.error('FedaPay erreur (génération token):', JSON.stringify(tokenData));
+      return {
+        statusCode: 502,
+        body: JSON.stringify({ error: 'Erreur génération lien de paiement: ' + JSON.stringify(tokenData) })
+      };
     }
 
     // 3) On enregistre une "commande en attente" dans Firestore.
@@ -112,11 +123,8 @@ exports.handler = async (event) => {
       service: chosenService,
       amount,
       // durationUnit/durationCount/durationDays : null pour "temp" (usage unique).
-      // Pour "monthly", à lire par fedapay-webhook.js pour appeler
+      // Pour "monthly", lu par fedapay-webhook.js pour appeler
       // buySmspvaRent(countryCode, service, duration.smspvaDtype, duration.smspvaDcount)
-      // ⚠️ fedapay-webhook.js n'a pas encore été mis à jour pour lire ces
-      // champs — actuellement il appelle sans doute buySmspvaMonthly() en dur,
-      // ce qui ignore la durée choisie. À corriger avant mise en prod.
       durationUnit: duration?.unit || null,
       durationCount: duration?.count || null,
       durationDays: duration?.durationDays || null,
@@ -131,10 +139,10 @@ exports.handler = async (event) => {
     };
 
   } catch (err) {
+    console.error('Erreur create-transaction:', err.message);
     return {
       statusCode: err.statusCode || 500,
       body: JSON.stringify({ error: err.message || 'Erreur serveur.' })
     };
   }
 };
-             
