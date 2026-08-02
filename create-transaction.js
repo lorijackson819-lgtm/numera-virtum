@@ -84,7 +84,8 @@ exports.handler = async (event) => {
     });
     const txData = await txRes.json();
     if (!txRes.ok || !txData.v1_transaction) {
-      return { statusCode: 502, body: JSON.stringify({ error: 'Erreur création paiement FedaPay.' }) };
+      console.error('FedaPay erreur:', JSON.stringify(txData));
+      return { statusCode: 502, body: JSON.stringify({ error: 'Erreur FedaPay: ' + (txDat.message || JSON.stringify(txData)) }) };
     }
     const transactionId = txData.v1_transaction.id;
 
