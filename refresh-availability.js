@@ -1,6 +1,6 @@
 // netlify/functions/refresh-availability.js
 // Fonction PLANIFIÉE (Netlify Scheduled Function) — s'exécute automatiquement
-// toutes les 30 minutes (voir schedule dans netlify.toml).
+// 2x/jour (minuit et midi, voir schedule dans netlify.toml).
 // Interroge SMSPVA pour savoir quels pays ont des numéros en stock actuellement,
 // et écrit le résultat dans Firestore. Le front ne parle JAMAIS directement
 // à SMSPVA (clé API jamais exposée), il lit ce cache via get-availability.js.
@@ -14,17 +14,36 @@ const SMSPVA_API_KEY = process.env.SMSPVA_API_KEY;
 const ACTIVATION_BASE = 'https://api.smspva.com';
 
 // Les 3 seuls services vendus sur le site (whitelist, voir create-transaction.js).
-// On ne récupère le prix QUE pour ceux-là — pas la peine d'interroger SMSPVA
-// pour des services qu'on ne vend pas, ça économise des appels (donc du temps
-// d'exécution de la fonction planifiée).
 const PRICED_SERVICES = ['whatsapp', 'tiktok', 'telegram'];
 
+// Petite pause entre chaque appel sortant vers SMSPVA, pour éviter de
+// déclencher leur limitation de débit (erreur 411 "low karma or ratelimits")
+// — vu en pratique le 03/08/2026 : ~84+ appels d'un coup (disponibilité +
+// prix) suffisaient à la déclencher, ce qui corrompait ensuite le cache.
+const REQUEST_DELAY_MS = 150;
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+// Détecte si une réponse SMSPVA est en fait une erreur (ex: rate-limit,
+// karma insuffisant) plutôt qu'un vrai résultat de stock. Sans ce garde-fou,
+// une réponse d'erreur du type {"status":0,"msg":"..."} se faisait compter
+// comme "0 numéro disponible" au lieu d'être ignorée — c'est CE bug précis
+// qui a fait passer tous les pays à "indisponible" d'un coup le 03/08/2026.
+function isErrorResponse(data) {
+  if (!data || typeof data !== 'object') return true;
+  if ('status' in data && Number(data.status) === 0) return true;
+  if ('msg' in data && !('data' in data)) return true;
+  if ('error' in data) return true;
+  return false;
+}
+
 // Détermine si un pays a du stock à partir de la réponse countnumbers.
-// ⚠️ Format de réponse non confirmé à 100% dans la doc consultée — cette
-// fonction essaie plusieurs formes plausibles pour rester robuste, et logue
-// un avertissement si rien n'est reconnu (au lieu de planter ou de tout
-// marquer indisponible par erreur).
+// ⚠️ Format de réponse "succès" non confirmé à 100% dans la doc consultée —
+// cette fonction essaie plusieurs formes plausibles pour rester robuste,
+// et logue un avertissement si rien n'est reconnu (au lieu de planter ou
+// de tout marquer indisponible par erreur).
 function extractTotalCount(data) {
+  if (isErrorResponse(data)) return null;
+
   const payload = data?.data ?? data;
 
   if (typeof payload === 'number') return payload;
@@ -64,16 +83,17 @@ exports.handler = async () => {
 
       if (total === null) {
         warnings.push(siteCode);
-        // Format non reconnu : on ne change pas le statut existant plutôt que
-        // de risquer de marquer un pays qui fonctionne comme "indisponible"
+        // Erreur, rate-limit, ou format non reconnu : on NE TOUCHE PAS au
+        // statut existant plutôt que de risquer de marquer à tort un pays
+        // qui fonctionne comme "indisponible".
         continue;
       }
 
       results[siteCode] = total > 0;
     } catch (e) {
       warnings.push(`${siteCode} (erreur: ${e.message})`);
-      // En cas d'erreur réseau ponctuelle, on ne touche pas au statut existant
     }
+    await sleep(REQUEST_DELAY_MS);
   }
 
   const docRef = db.collection('availability').doc('countries');
@@ -86,18 +106,12 @@ exports.handler = async () => {
   });
 
   if (warnings.length > 0) {
-    console.warn('refresh-availability: pays non mis à jour (format inattendu ou erreur):', warnings);
+    console.warn('refresh-availability: pays non mis à jour (erreur/rate-limit/format inattendu):', warnings);
   }
 
   // ───────────────────────────────────────────────────────────────────────
-  // PRIX PAR PAYS + SERVICE — alimente pricing.js côté serveur et l'affichage
-  // du prix jour/semaine/mois côté front.
-  // ⚠️ On ne fait ça QUE pour les pays disponibles (results[siteCode] === true),
-  // pour limiter le nombre d'appels sortants. Même comme ça, ça reste
-  // (nb pays dispo) × 3 services appels supplémentaires toutes les 30 min —
-  // à surveiller niveau durée d'exécution de la fonction si la liste de pays
-  // grandit beaucoup (le temps d'exécution compte dans le crédit Netlify,
-  // pas le nombre d'appels sortants en soi).
+  // PRIX PAR PAYS + SERVICE
+  // ───────────────────────────────────────────────────────────────────────
   const priceWarnings = [];
   const availableCountries = Object.keys(results).filter(code => results[code]);
 
@@ -113,6 +127,7 @@ exports.handler = async () => {
         priceWarnings.push(`${siteCode}/${service} (${e.message})`);
         // On garde l'ancien prix en cache plutôt que de l'effacer en cas d'erreur.
       }
+      await sleep(REQUEST_DELAY_MS);
     }
   }
 
@@ -130,3 +145,4 @@ exports.handler = async () => {
     })
   };
 };
+  
