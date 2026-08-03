@@ -10,24 +10,16 @@ const SMSPVA_API_KEY = process.env.SMSPVA_API_KEY;
 const ACTIVATION_BASE = 'https://api.smspva.com';
 const RENT_BASE = 'https://smspva.com/api/rent.php';
 
-// ─────────────────────────────────────────────────────────────────────────
-// Codes "service" SMSPVA (format opt{N}). À COMPLÉTER avec les vrais codes
-// trouvés dans la "Services list" de la doc (recherche "WhatsApp" etc.)
-// ─────────────────────────────────────────────────────────────────────────
 const SMSPVA_SERVICE_CODES = {
-  whatsapp: 'opt20',  // confirmé dans docs.smspva.com (Services list, #200)
-  tiktok:   'opt104', // confirmé (#8 dans la capture précédente)
-  telegram: 'opt29',  // confirmé (#5 dans la capture précédente)
-  other:    'opt19'   // "OTHER" — catégorie générique
+  whatsapp: 'opt20',
+  tiktok:   'opt104',
+  telegram: 'opt29',
+  other:    'opt19'
 };
 
 function smspvaServiceCode(service) {
   return SMSPVA_SERVICE_CODES[service] || SMSPVA_SERVICE_CODES.other;
 }
-
-// ═══════════════════════════════════════════════════════════════════════
-// TEMPORAIRE — API REST "activation" v2
-// ═══════════════════════════════════════════════════════════════════════
 
 async function buySmspvaTemp(countryCode, service = 'whatsapp') {
   const serviceCode = smspvaServiceCode(service);
@@ -51,7 +43,7 @@ async function checkSmsSmspvaTemp(providerId) {
   const res = await fetch(url, { headers: { apikey: SMSPVA_API_KEY } });
   const data = await res.json();
 
-  if (data.statusCode === 202) return { received: false }; // pas encore reçu
+  if (data.statusCode === 202) return { received: false };
   if (data.statusCode !== 200 || !data.data?.sms) return { received: false };
 
   const smsText = typeof data.data.sms === 'string' ? data.data.sms : JSON.stringify(data.data.sms);
@@ -59,39 +51,30 @@ async function checkSmsSmspvaTemp(providerId) {
   return { received: true, sms: smsText, code: codeMatch ? codeMatch[0] : null };
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// PRIX — utilisé par refresh-availability.js pour alimenter le cache prix
-// ═══════════════════════════════════════════════════════════════════════
-// ⚠️ Endpoint non confirmé à 100% dans la doc consultée : method=getprice
-// est une supposition basée sur le pattern des autres méthodes rent.php
-// (create/activate/sms). À VÉRIFIER/AJUSTER si l'appel échoue en prod —
-// voir docs.smspva.com, section "rent" ou contacter leur support pour le
-// nom exact du champ de prix par jour.
+// PRIX — utilisé par refresh-availability.js pour alimenter le cache prix.
+// Confirmé via la doc officielle (03/08/2026) : la méthode est "getdata"
+// (pas "getprice"), et le prix par jour est dans le champ "price_day" —
+// la réponse est une LISTE de tous les services du pays, il faut donc
+// chercher celui qui correspond à notre service.
 async function getSmspvaDailyPrice(countryCode, service = 'whatsapp') {
   const serviceCode = smspvaServiceCode(service);
-  const url = `${RENT_BASE}?method=getprice&apikey=${SMSPVA_API_KEY}&country=${countryCode.toUpperCase()}&service=${serviceCode}`;
+  const url = `${RENT_BASE}?method=getdata&apikey=${SMSPVA_API_KEY}&country=${countryCode.toUpperCase()}`;
 
   const res = await fetch(url);
   const data = await res.json();
 
-  // On essaie plusieurs formes plausibles de réponse, comme pour
-  // extractTotalCount dans refresh-availability.js — mieux vaut logguer
-  // un format inattendu que de planter ou renvoyer un prix faux.
-  const raw = data?.data?.price ?? data?.data?.[0]?.price ?? data?.price ?? null;
-  const pricePerDayUSD = raw !== null ? Number(raw) : null;
-
-  if (pricePerDayUSD === null || Number.isNaN(pricePerDayUSD)) {
-    throw new Error(`SMSPVA getprice: format de réponse inattendu pour ${countryCode}/${service}.`);
+  if (data.status !== 1 || !Array.isArray(data.data)) {
+    throw new Error(`SMSPVA getdata: ${data.msg || 'format de réponse inattendu'} pour ${countryCode}.`);
   }
-  return pricePerDayUSD;
+
+  const entry = data.data.find(s => s.service === serviceCode);
+  if (!entry || entry.price_day === undefined) {
+    throw new Error(`SMSPVA getdata: service ${serviceCode} non trouvé pour ${countryCode}.`);
+  }
+
+  return Number(entry.price_day);
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// MENSUEL / LOCATION — API "rent" (location longue durée, durée flexible)
-// ═══════════════════════════════════════════════════════════════════════
-
-// dtype: 'day' | 'week' | 'month' — dcount: nombre d'unités.
-// Généralisé pour supporter jour/semaine/mois (voir pricing.js).
 async function buySmspvaRent(countryCode, service = 'whatsapp', dtype = 'month', dcount = 1) {
   const serviceCode = smspvaServiceCode(service);
   const url = `${RENT_BASE}?method=create&apikey=${SMSPVA_API_KEY}&dtype=${dtype}&dcount=${dcount}&country=${countryCode.toUpperCase()}&service=${serviceCode}`;
@@ -105,7 +88,6 @@ async function buySmspvaRent(countryCode, service = 'whatsapp', dtype = 'month',
   const order = data.data[0];
   const fullPhone = `${order.ccode}${order.pnumber}`;
 
-  // Activation obligatoire avant de pouvoir recevoir des SMS
   const activateUrl = `${RENT_BASE}?method=activate&apikey=${SMSPVA_API_KEY}&id=${order.id}`;
   const activateRes = await fetch(activateUrl);
   const activateData = await activateRes.json();
@@ -117,7 +99,7 @@ async function buySmspvaRent(countryCode, service = 'whatsapp', dtype = 'month',
     provider: 'smspva-rent',
     providerId: String(order.id),
     phone: fullPhone,
-    expiresAt: order.until * 1000 // timestamp unix (secondes) → ms
+    expiresAt: order.until * 1000
   };
 }
 
@@ -139,10 +121,6 @@ async function checkSmsSmspvaMonthly(providerId) {
   };
 }
 
-// Alias rétro-compatible : ancien appel "1 mois" utilisé par
-// fedapay-webhook.js actuel. Ne pas supprimer tant que le webhook n'a
-// pas été mis à jour pour appeler buySmspvaRent directement avec
-// dtype/dcount venant de pendingOrders (durationUnit/durationCount).
 function buySmspvaMonthly(countryCode, service = 'whatsapp') {
   return buySmspvaRent(countryCode, service, 'month', 1);
 }
@@ -156,3 +134,4 @@ module.exports = {
   getSmspvaDailyPrice,
   smspvaServiceCode
 };
+      
