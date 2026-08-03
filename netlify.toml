@@ -12,3 +12,6 @@
 
 [functions."refresh-availability"]
   schedule = "0 0,12 * * *"
+
+[functions."refresh-prices"]
+  schedule = "0 */3 * * *"
