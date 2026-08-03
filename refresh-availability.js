@@ -2,9 +2,7 @@
 // Fonction PLANIFIÉE — s'exécute 2x/jour (minuit et midi, voir netlify.toml).
 // UNIQUEMENT la disponibilité des pays (rapide, ~42 appels, largement sous
 // la limite de 30 secondes de Netlify pour les fonctions planifiées).
-// Les PRIX sont gérés séparément par refresh-prices.js — ne jamais remettre
-// les deux dans la même fonction, ça a dépassé la limite de temps le
-// 03/08/2026 et empêchait toute écriture dans Firestore (échec silencieux).
+// Les PRIX sont gérés séparément par refresh-prices.js.
 
 const fetch = require('node-fetch');
 const { db } = require('./_firebase');
@@ -13,22 +11,22 @@ const { COUNTRY_SMSPVA } = require('./_countries');
 const SMSPVA_API_KEY = process.env.SMSPVA_API_KEY;
 const ACTIVATION_BASE = 'https://api.smspva.com';
 
-// Détecte si une réponse SMSPVA est en fait une erreur (rate-limit, karma
-// insuffisant, etc.) plutôt qu'un vrai résultat de stock. Sans ce garde-fou,
-// une réponse d'erreur du type {"status":0,"msg":"..."} se faisait compter
-// comme "0 numéro disponible" au lieu d'être ignorée.
-function isErrorResponse(data) {
-  if (!data || typeof data !== 'object') return true;
-  if ('status' in data && Number(data.status) === 0) return true;
-  if ('msg' in data && !('data' in data)) return true;
-  if ('error' in data) return true;
-  return false;
-}
-
+// Extrait le total de numéros disponibles à partir de la réponse de
+// /activation/countnumbers/{country}.
+// Cet endpoint fait partie de la même famille "API REST v2" que
+// /activation/number/... et /activation/sms/... (confirmés dans docs.smspva.com) :
+//   - Succès  : {"statusCode":200, "data": ...}
+//   - Erreur  : {"statusCode":4xx/5xx, "error":{"type":..., "description":...}}
+// (confirmé le 03/08/2026 en testant directement cette famille d'endpoints —
+// PAS le format {"status":0/1,"msg":...} de l'ancienne API rent.php, qui est
+// une API différente).
 function extractTotalCount(data) {
-  if (isErrorResponse(data)) return null;
+  if (!data || typeof data !== 'object') return null;
+  if (data.statusCode !== undefined && data.statusCode !== 200) return null; // erreur
+  if (data.error) return null;
 
-  const payload = data?.data ?? data;
+  const payload = data.data;
+  if (payload === undefined || payload === null) return null;
 
   if (typeof payload === 'number') return payload;
 
@@ -39,7 +37,7 @@ function extractTotalCount(data) {
     }, 0);
   }
 
-  if (payload && typeof payload === 'object') {
+  if (typeof payload === 'object') {
     return Object.values(payload).reduce((sum, v) => {
       if (typeof v === 'number') return sum + v;
       if (v && typeof v === 'object') {
@@ -50,7 +48,7 @@ function extractTotalCount(data) {
     }, 0);
   }
 
-  return null;
+  return null; // format non reconnu
 }
 
 exports.handler = async () => {
@@ -66,8 +64,8 @@ exports.handler = async () => {
       const total = extractTotalCount(data);
 
       if (total === null) {
-        warnings.push(siteCode);
-        continue;
+        warnings.push(`${siteCode}: ${JSON.stringify(data).slice(0, 150)}`);
+        continue; // on ne touche pas au statut existant
       }
 
       results[siteCode] = total > 0;
@@ -86,12 +84,12 @@ exports.handler = async () => {
   });
 
   if (warnings.length > 0) {
-    console.warn('refresh-availability: pays non mis à jour (erreur/rate-limit/format inattendu):', warnings);
+    console.warn('refresh-availability: pays non mis à jour:', warnings);
   }
 
   return {
     statusCode: 200,
-    body: JSON.stringify({ updated: Object.keys(results).length, warnings: warnings.length })
+    body: JSON.stringify({ updated: Object.keys(results).length, warnings: warnings.length, sample: warnings[0] || null })
   };
 };
   
